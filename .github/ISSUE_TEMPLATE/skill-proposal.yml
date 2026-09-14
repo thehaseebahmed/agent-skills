@@ -1,0 +1,49 @@
+name: Skill proposal
+description: Propose a new skill for the pack
+title: "skill: <name>"
+labels: ["skill-proposal"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A skill is a workflow with exit criteria. If the content cannot be
+        violated by anything an agent does, it is reference material — propose it
+        for `references/` instead.
+  - type: input
+    id: name
+    attributes:
+      label: Proposed skill name
+      description: kebab-case, matching the directory it would live in
+      placeholder: incremental-implementation
+    validations:
+      required: true
+  - type: textarea
+    id: trigger
+    attributes:
+      label: When should it fire?
+      description: The `Use when …` clause, in the words a user would actually type.
+    validations:
+      required: true
+  - type: textarea
+    id: workflow
+    attributes:
+      label: What are the steps?
+      description: The ordered workflow, with the checkpoint between each step.
+    validations:
+      required: true
+  - type: textarea
+    id: overlap
+    attributes:
+      label: Why isn't this an existing skill?
+      description: |
+        Which existing skills come closest, and why extending one is worse than
+        adding this. Overlapping skills compete, and the wrong one wins.
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: How would you tell it was applied?
+      description: The checkable exit criteria, with the commands that prove them.
+    validations:
+      required: true

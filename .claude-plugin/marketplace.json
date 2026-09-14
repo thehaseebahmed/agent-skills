@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "haseeb-agent-skills",
+  "description": "Reusable engineering workflow skills for AI coding agents.",
+  "owner": {
+    "name": "Haseeb Ahmed",
+    "url": "https://github.com/thehaseebahmed"
+  },
+  "plugins": [
+    {
+      "name": "agent-skills",
+      "version": "0.1.0",
+      "source": {
+        "source": "github",
+        "repo": "thehaseebahmed/agent-skills"
+      },
+      "description": "Portable SKILL.md workflows for AI coding agents, with explicit steps, triggers, and exit criteria.",
+      "homepage": "https://github.com/thehaseebahmed/agent-skills",
+      "license": "MIT",
+      "keywords": ["skills", "agents", "workflows", "engineering"]
+    }
+  ]
+}

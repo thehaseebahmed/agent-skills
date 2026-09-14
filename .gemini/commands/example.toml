@@ -1,0 +1,19 @@
+# TEMPLATE. This repository ships no skills yet, so there is nothing for a real
+# command to invoke. When you add a skill, copy this file to
+# `commands/<command-name>.toml` and point it at the skill.
+# This copy lives in .gemini/commands/ so the Gemini CLI discovers it.
+
+description = "Template for a skill-invoking command — copy it, do not run it"
+
+prompt = """
+Invoke the <skill-name> skill.
+
+State what the command should accomplish, then any setup the skill expects:
+
+1. The first thing to establish before the skill's workflow starts
+2. The second
+3. Where the output should go, and what to confirm with the user
+
+Follow the skill's workflow to its verification section. Do not report the work
+as complete until that section's checks actually pass.
+"""
