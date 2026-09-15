@@ -36,6 +36,9 @@ nothing at runtime will tell you so.
   `docs/*-setup.md` was verified against that vendor's documentation, with the
   date noted. Do not add or edit one from memory — check the vendor's docs, and
   if you cannot reach them, say the page is unverified rather than guessing.
+- **Commit subjects follow Conventional Commits.** `type: description`, in the
+  imperative, 72 characters or fewer, with the body explaining why. The allowed
+  types and scopes are in [CONTRIBUTING.md](CONTRIBUTING.md#commit-messages).
 - **The symlinks are load-bearing.** `.agents/skills`, `.claude/skills` and
   `.opencode/skills` point at `skills/` so a clone is discoverable in place.
   Don't replace them with copies.

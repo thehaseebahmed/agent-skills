@@ -51,6 +51,51 @@ in the same PR: the rule, a fixture under `scripts/__fixtures__/` that provokes
 it, and a test asserting on the specific error message. A test that only checks
 "something failed" will pass while the rule quietly breaks.
 
+## Commit messages
+
+This repo follows [Conventional Commits](https://www.conventionalcommits.org/):
+
+```
+<type>[optional scope]: <description>
+
+[body]
+
+[footers]
+```
+
+- Subject in the imperative, lowercase after the colon, no trailing period,
+  72 characters or fewer
+- Types: `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `chore`, `ci`,
+  `build`, `revert`
+- Scopes, when one earns its place: `skills`, `lint`, `manifests`, `hooks`,
+  `docs`, `ci`
+- A breaking change takes a `!` after the type or scope and a `BREAKING CHANGE:`
+  footer explaining the migration
+- Wrap the body at 72 columns and use it to say *why* — the diff already says
+  what changed
+
+A small change needs only a subject:
+
+```
+docs: correct the Windsurf global skills path
+```
+
+A larger one earns a body, and a breaking one a footer:
+
+```
+feat(lint)!: reject descriptions without a trigger clause
+
+A description that says only what a skill does produces a skill that
+never loads: agents match on the trigger text, not on the summary.
+
+BREAKING CHANGE: skills whose description lacks a "Use when" clause now
+fail validation and must be updated before they will pass CI.
+```
+
+The repository's very first commit predates this convention and is
+deliberately left alone: it is shared with `main`, and rewriting it would
+sever the history the branches have in common.
+
 ## Repo-scoped files
 
 `AGENTS.md` and `CLAUDE.md` configure agents working on *this repository*. They
