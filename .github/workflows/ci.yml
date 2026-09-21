@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  validate:
+    name: Validate skills and manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Validate skills
+        run: node scripts/validate-skills.js
+
+      - name: Validate plugin manifests
+        run: node scripts/validate-manifests.js
+
+      - name: Unit tests
+        run: node --test "scripts/**/*.test.js"
+
+      - name: Check the skill template still lints clean
+        run: |
+          cp -r templates/skill-template skills/skill-template
+          node scripts/validate-skills.js
+          rm -rf skills/skill-template
+
+      - name: Check manifest JSON is parseable
+        run: |
+          for f in plugin.json .claude-plugin/plugin.json \
+                   .claude-plugin/marketplace.json .codex-plugin/plugin.json \
+                   .agents/plugins/marketplace.json; do
+            node -e "JSON.parse(require('fs').readFileSync('$f','utf8'))" || exit 1
+            echo "ok $f"
+          done
+
+  shell:
+    name: Shell hooks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ShellCheck the hooks
+        run: shellcheck hooks/*.sh
+
+      - name: Hook exits cleanly with no skills installed
+        run: sh hooks/session-start.sh

@@ -1,0 +1,25 @@
+{
+  "name": "agent-skills",
+  "version": "0.1.0",
+  "description": "Reusable engineering workflow skills for AI coding agents.",
+  "author": {
+    "name": "Haseeb Ahmed",
+    "url": "https://github.com/thehaseebahmed"
+  },
+  "homepage": "https://github.com/thehaseebahmed/agent-skills",
+  "repository": "https://github.com/thehaseebahmed/agent-skills",
+  "license": "MIT",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Agent Skills",
+    "shortDescription": "Portable engineering workflows for AI coding agents.",
+    "longDescription": "A skill pack of portable SKILL.md workflows. Each skill states when it applies, the steps to follow, the ways it commonly goes wrong, and how to verify it was applied correctly.",
+    "developerName": "Haseeb Ahmed",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Read", "Write"],
+    "defaultPrompt": [
+      "Which skill applies to the task I am about to start?",
+      "Apply the relevant skill to this change"
+    ]
+  }
+}

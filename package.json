@@ -1,0 +1,20 @@
+{
+  "name": "agent-skills",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Reusable engineering workflow skills for AI coding agents.",
+  "license": "MIT",
+  "author": "Haseeb Ahmed",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/thehaseebahmed/agent-skills.git"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "lint": "node scripts/validate-skills.js && node scripts/validate-manifests.js",
+    "test": "node --test \"scripts/**/*.test.js\"",
+    "check": "npm run lint && npm test"
+  }
+}

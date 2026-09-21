@@ -1,0 +1,14 @@
+{
+  "name": "agent-skills",
+  "version": "0.1.0",
+  "description": "Reusable engineering workflow skills for AI coding agents — portable SKILL.md workflows with explicit steps, triggers, and exit criteria.",
+  "author": {
+    "name": "Haseeb Ahmed",
+    "url": "https://github.com/thehaseebahmed"
+  },
+  "homepage": "https://github.com/thehaseebahmed/agent-skills",
+  "repository": "https://github.com/thehaseebahmed/agent-skills",
+  "license": "MIT",
+  "commands": ["./.claude/commands", "./commands"],
+  "skills": "./skills"
+}
