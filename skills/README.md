@@ -11,9 +11,9 @@ skills/
     scripts/          # optional — only when the skill ships runnable helpers
 ```
 
-**No skills have been added yet.** The scaffolding, validators, and per-agent
-integrations are in place, so the first skill is a matter of content rather than
-plumbing.
+| Skill | What it does |
+|---|---|
+| [`tha-planning`](tha-planning/SKILL.md) | Turns a spec into a per-layer change inventory (`plan.md`) and a test-first, wave-ordered task list (`tasks.md`) |
 
 To add one:
 

@@ -4,10 +4,10 @@ Reusable engineering workflow skills for AI coding agents — portable `SKILL.md
 files that load when a task matches, and tell the agent what to do, how to check
 it, and how it usually goes wrong.
 
-> **Status: scaffolding complete, no skills yet.**
-> The validators, per-agent integrations, plugin manifests and CI are in place.
-> `skills/` is intentionally empty — content comes next. See
-> [skills/README.md](skills/README.md) to add the first one.
+The skills live in [`skills/`](skills/) — start with
+[`tha-planning`](skills/tha-planning/SKILL.md), which turns a spec into a
+per-layer change inventory and a test-first task list. See
+[skills/README.md](skills/README.md) to add another.
 
 ## Why skills and not a rules file
 
