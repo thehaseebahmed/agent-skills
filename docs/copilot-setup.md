@@ -31,3 +31,11 @@ for Copilot.
 
 When Copilot selects a skill, the `SKILL.md` is injected into the agent's
 context — the same portable file that works in Claude Code, Cursor, and the rest.
+
+## Skills that run scripts
+
+`tha-theseus` enforces its gates with `scripts/theseus.js`, which ships inside
+the skill directory, so copying the directory brings it along. It needs Node 20+
+and git on the machine or runner where Copilot works; it has no npm
+dependencies. Copilot has no equivalent here of the Claude Code `Stop` hook this
+pack registers, so under Copilot the gates are held by the script's refusals alone.

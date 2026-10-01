@@ -14,7 +14,7 @@
   },
   "scripts": {
     "lint": "node scripts/validate-skills.js && node scripts/validate-manifests.js",
-    "test": "node --test \"scripts/**/*.test.js\"",
+    "test": "node --test \"scripts/**/*.test.js\" \"skills/**/*.test.js\"",
     "check": "npm run lint && npm test"
   }
 }

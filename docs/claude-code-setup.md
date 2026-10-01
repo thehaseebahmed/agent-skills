@@ -47,3 +47,14 @@ want to override a pack skill without editing the pack.
 skill inventory. It resolves `${CLAUDE_PLUGIN_ROOT}` first and falls back to
 `${CLAUDE_PROJECT_DIR}/.claude/hooks/`, and it exits 0 on every path — a hook
 that fails must never block a session.
+
+## Stop hook
+
+The same file registers a `Stop` hook for `tha-theseus`. It runs
+`theseus.js check`, which does nothing unless a Theseus run is active in the
+project. While a checkpoint is being built with gates still open, it exits 2 —
+Claude Code's documented way for a `Stop` hook to block stopping and feed its
+stderr back to the model — so the agent keeps going instead of declaring victory
+early. It lets the session stop while a checkpoint waits for human approval,
+gives up after three blocks per checkpoint, and exits 0 on any error, including
+a missing `node`.

@@ -9,6 +9,16 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "SCRIPT=\"${CLAUDE_PLUGIN_ROOT}/skills/tha-theseus/scripts/theseus.js\"; [ -f \"$SCRIPT\" ] || SCRIPT=\"${CLAUDE_PROJECT_DIR}/.claude/skills/tha-theseus/scripts/theseus.js\"; [ -f \"$SCRIPT\" ] && command -v node >/dev/null 2>&1 || exit 0; node \"$SCRIPT\" check"
+          }
+        ]
+      }
     ]
   }
 }

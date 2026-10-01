@@ -24,7 +24,7 @@ jobs:
         run: node scripts/validate-manifests.js
 
       - name: Unit tests
-        run: node --test "scripts/**/*.test.js"
+        run: node --test "scripts/**/*.test.js" "skills/**/*.test.js"
 
       - name: Check the skill template still lints clean
         run: |

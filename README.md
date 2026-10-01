@@ -6,8 +6,10 @@ it, and how it usually goes wrong.
 
 The skills live in [`skills/`](skills/) — start with
 [`tha-planning`](skills/tha-planning/SKILL.md), which turns a spec into a
-per-layer change inventory and a test-first task list. See
-[skills/README.md](skills/README.md) to add another.
+per-layer change inventory and a test-first task list — and
+[`tha-theseus`](skills/tha-theseus/SKILL.md), which builds or migrates work
+checkpoint by checkpoint behind enforced quality gates, in the manner of
+Shopify's Helix. See [skills/README.md](skills/README.md) to add another.
 
 ## Why skills and not a rules file
 
