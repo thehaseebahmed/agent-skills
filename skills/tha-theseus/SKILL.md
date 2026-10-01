@@ -35,8 +35,12 @@ are enforced by `scripts/theseus.js`, the only thing that can mark a checkpoint 
 records a reviewer verdict it never obtained will get past it. Don't.
 
 In the steps below, `theseus` means `node <this skill's directory>/scripts/theseus.js`,
-run from inside the target repository. It needs git and Node 20+, and has no
-dependencies.
+run from the directory you are working in, inside a git repository. It needs git and
+Node 20+, and has no dependencies.
+
+The human follows the run in a **live viewer**: a local page that `theseus serve`
+starts and prints a link to. It shows every checkpoint, gate, test output, reviewer
+verdict, screenshot and learning as it happens, and it is where the human approves.
 
 ## When to Use
 
@@ -79,6 +83,7 @@ How to get a fresh context:
 |---|---|
 | Claude Code | the Agent tool (subagents) |
 | GitHub Copilot (VS Code, CLI) | its subagent / custom-agent mechanism |
+| Either, with a pinned model | the `theseus-planner` / `theseus-reviewer` custom agents (Step 1) |
 | Neither available | a fresh headless session: `claude -p "<brief>"` or `copilot -p "<brief>"` |
 | None of the above | do the work inline. For reviewers, record `--isolation none` |
 
@@ -87,16 +92,20 @@ without it.
 
 ### Step 0: Locate or resume the run
 
-State lives beside `tha-planning`'s: `$THA_PLANS_DIR/<repo>/theseus/` if that is set,
-otherwise `<repo>/plans/theseus/`. Inside it, `current/` holds the active run and
-`learnings.md` holds the memory, which outlives every run.
+State lives in `.theseus/`, in the directory you run `theseus init` from. Commands
+find it from any subfolder.
+
+- `.theseus/current/` holds the active run.
+- `.theseus/learnings.json` is the memory, and outlives every run.
+
+Never edit either by hand.
 
 ```bash
 theseus status
 ```
 
-- **There is an active run:** resume it at the step `next:` names. Never start a
-  second one.
+- **There is an active run:** run `theseus serve`, give the human the link, and resume
+  at the step `next:` names. Never start a second run.
 - **There is none:** go to Step 1.
 
 ### Step 1: Pin the reference and the rules
@@ -109,7 +118,7 @@ Settle these with the human before anything else:
      and approved now. Gate 2 cannot run against nothing.
 2. **Architecture docs:** the written standards the reviewers judge against
    (`ARCHITECTURE.md`, UI guidelines, `CONTRIBUTING.md`). If none exist, the human
-   names the rules, and they go in `learnings.md` as the starting rules.
+   names the rules, and each goes in with `theseus learn --source human`.
 3. **Test command:** the repo's own command.
 4. **Autonomy:**
 
@@ -119,10 +128,41 @@ Settle these with the human before anything else:
    | `batch:N` | once per N checkpoints |
    | `unattended` | nothing until the PR; every approval is recorded as deferred |
 
+5. **Where approvals come from:**
+
+   | Setting | Who can approve |
+   |---|---|
+   | `viewer` (default) | only the human, by clicking in the viewer. CLI approvals are refused |
+   | `any` | also the CLI. Use this only when the human cannot open a link to this machine (a cloud agent). Those approvals are shown as "reported by agent" |
+
+6. **Models (optional):** does the human want the checkpoint planner or the reviewers
+   on a specific model? If so, run `theseus agents`. It writes custom agents into the
+   repo, for Claude Code and/or Copilot:
+
+   ```bash
+   theseus agents --target claude,copilot \
+     --planner-model opus --planner-model-copilot "<Copilot model name>" \
+     --reviewer-model sonnet --reviewer-model-copilot "<Copilot model name>"
+   ```
+
+   - It writes `.claude/agents/theseus-{planner,reviewer}.md` and
+     `.github/agents/theseus-{planner,reviewer}.agent.md`.
+   - Model names differ between the two tools, which is why there are two flags.
+   - Leave a flag out and that agent inherits the session's model.
+   - From then on, dispatch planning to `theseus-planner` and reviews to
+     `theseus-reviewer` by name.
+   - **Copilot CLI caveat:** it has been reported to silently downgrade a subagent to
+     the session's model when the subagent's model costs more (github/copilot-cli#2758).
+     Start the session on at least the planner's model.
+
 ```bash
 theseus init --key HR-7 --reference "legacy/LeaveForm.tsx + docs/mock.html" \
   --test-cmd "npm test" --arch "ARCHITECTURE.md,docs/ui.md" --autonomy step
+theseus serve
 ```
+
+`serve` starts the viewer in the background and prints its link. **Give the human the
+link now.** It is how they follow the run and how they approve.
 
 **Pre-flight:** a subagent confirms that the test command runs and that the app (and
 the reference app, if there is one) starts. Gates mean nothing on a project that is
@@ -130,8 +170,8 @@ already broken. Fix that first, or tell the human.
 
 ### Step 2: Plan the checkpoints, with their tests
 
-Dispatch the **checkpoint planner** with [checkpoints.md](checkpoints.md) and the
-reference. It returns an ordered list:
+Dispatch the **checkpoint planner** (`theseus-planner`, if you generated it) with
+[checkpoints.md](checkpoints.md) and the reference. It returns an ordered list:
 
 - small checkpoints (XS–S)
 - smallest and most foundational first
@@ -144,13 +184,20 @@ the human approves what "done" means, not just titles.
 theseus plan --file /tmp/checkpoints.json
 ```
 
-This writes `checkpoints.md`, a plain-language view. Show it to the human.
+The checkpoints appear in the viewer at once, each with its done-criteria and
+planned tests.
 
-**Stop here.** Nothing is built until the human approves the list:
+**Stop here.** Nothing is built until the human approves the list. Tell them it is
+ready, then wait:
 
 ```bash
-theseus approve-plan --by <name>
+theseus wait     # returns when they approve or send feedback; re-run on timeout
 ```
+
+- **Feedback instead of approval:** read it with `theseus inbox`, revise, `plan`
+  again, and wait again.
+- **With `--approvals any`**, a human who has approved in chat is recorded with
+  `theseus approve-plan --by <name>`.
 
 ### Step 3: The checkpoint loop
 
@@ -159,7 +206,7 @@ For each checkpoint, in order:
 1. **Begin.**
    - `theseus begin CP1` refuses a dirty tree, an unapproved checkpoint, or a
      checkpoint whose predecessor isn't done.
-   - Read `learnings.md` and hand it to every subagent below.
+   - Run `theseus learnings` and hand its output to every subagent below.
 2. **Red.**
    - The test writer writes this checkpoint's planned tests.
    - Run `theseus record CP1 red`. The script runs the tests and **requires them to
@@ -167,7 +214,7 @@ For each checkpoint, in order:
 3. **Build.** The builder implements against the tests and the reference. Its brief is:
    - the checkpoint block
    - the reference
-   - `learnings.md`
+   - the learnings
    - the files in scope
 
    It is not given the whole plan.
@@ -177,13 +224,15 @@ For each checkpoint, in order:
      `theseus record CP1 visual --skip "<why nothing visible changed>"`.
    - **`ui: true`:** follow [gates.md](gates.md#gate-2-visual).
      1. Put the reference and the build in the **same state**.
-     2. Screenshot both.
+     2. Screenshot both into `.theseus/current/evidence/<CP>/`. The viewer shows
+        them side by side.
      3. Dispatch two blind reviewers, one for appearance and one for interaction.
      4. Record each:
         `theseus record CP1 visual --reviewer look --findings N`.
 6. **Gate 3, adversarial review.**
-   - Dispatch **two separate reviewer subagents**, each given only
-     [reviewer.md](reviewer.md), the diff, the architecture docs and `learnings.md`.
+   - Dispatch **two separate reviewer subagents** (`theseus-reviewer`, if you
+     generated it). Each is given only [reviewer.md](reviewer.md), the diff, the
+     architecture docs and the learnings.
      Never give them your reasoning, or the builder's.
    - Record each verdict:
      `theseus record CP1 review --reviewer a --findings N`.
@@ -201,11 +250,14 @@ For each checkpoint, in order:
    not "fixed the date bug".
 9. **Gate 4, human.**
    - Run `theseus advance CP1`. The script checks gates 1–3 at the current code.
-   - Under `step` it stops at `awaiting-approval`. Show the human:
-     - the diff
-     - the test output
-     - the reviewers' summaries
-   - When they approve: `theseus advance CP1 --approved-by <name>`.
+   - Under `step` it stops at `awaiting-approval`. The viewer shows the human the
+     evidence, with **Approve** and **Request changes** buttons. Tell them it's ready,
+     then run `theseus wait`.
+     - **Approved:** the checkpoint is done.
+     - **Changes requested:** it goes back to `building`. Read `theseus inbox`, hand
+       the request to a fixer, and run the gates again.
+   - With `--approvals any` and a human approving in chat:
+     `theseus advance CP1 --approved-by <name>`.
 10. **Commit** the checkpoint (code and tests) in the repo's commit style. Then begin
     the next one.
 
@@ -215,11 +267,13 @@ The full pass/fail criteria and re-run rules are in [gates.md](gates.md).
 
 When every checkpoint is done, the human tries the whole feature as a user would.
 
-- **Change requests** become new checkpoints. Run `theseus add --file`, then
-  `approve-plan`, then they go through the same loop. Each request is also distilled
-  into `learnings.md`.
-- **When nothing is left:** run `theseus archive`. Under `unattended`, the PR
-  description lists every deferred approval from `theseus status`.
+- **Change requests** arrive in the viewer's feedback box. Read them with
+  `theseus inbox`, turn them into new checkpoints with `theseus add --file`, and wait
+  for the human to approve them in the viewer. Then they go through the same loop.
+  Each request is also distilled into a learning.
+- **When nothing is left:** run `theseus archive`, then `theseus stop` to shut the
+  viewer down. Under `unattended`, the PR description lists every deferred approval
+  from `theseus status`.
 
 ### Enforcement in Claude Code
 
@@ -246,6 +300,9 @@ Other harnesses rely on the script's refusals alone.
 | "I'll just build it myself; spinning up a subagent is slow" | Over 30 checkpoints your context fills, and quality falls where nobody is looking. Coordinate; delegate |
 | "No subagents here, so I'll say the review was isolated anyway" | Record `--isolation none`. A false claim of isolation is worse than none |
 | "The human is busy; I'll approve and move on" | Only a human approves. If they want fewer interruptions, the fix is `batch:N` or `unattended`, chosen by them |
+| "I'll record the approval on the CLI and save them a click" | Under `--approvals viewer` the script refuses. Under `any`, the viewer marks it "reported by agent" for everyone to see. Ask, then `theseus wait` |
+| "The viewer link didn't open, so I'll skip approval" | Say so, and ask the human how they want to approve. Only they can switch to `--approvals any` or `unattended` |
+| "`wait` timed out, so they must be fine with it" | Silence is not approval. Run `wait` again, or remind them the viewer is waiting |
 | "The learning is specific to this checkpoint" | Then generalise it until it isn't, or it will be relearned on the next screen |
 
 ### Red Flags
@@ -254,8 +311,9 @@ Other harnesses rely on the script's refusals alone.
 - Code written before the plan was approved
 - A reviewer brief that contains the builder's reasoning or the plan
 - The same subagent building and fixing, or reviewing its own fix
-- `learnings.md` unchanged after a checkpoint that had findings
-- Hand-edits to anything under `plans/theseus/current/`: that is the script's state
+- No new learning after a checkpoint that had findings
+- Hand-edits to anything under `.theseus/`: that is the script's state
+- A link to the viewer never given to the human
 
 ## Verification
 
@@ -266,7 +324,10 @@ The skill was applied correctly when:
 - [ ] No checkpoint shows `WARNING: reviewed without context isolation`, or the human
       was told about each one that does
 - [ ] Every checkpoint is its own commit, in order
-- [ ] `learnings.md` gained a rule for every finding and every piece of human feedback
+- [ ] The learnings gained a rule for every finding and every piece of human feedback
+- [ ] No approval shows as "reported by agent" unless the run used `--approvals any`
+      and the human approved in chat
+- [ ] The viewer was stopped (`theseus stop`)
 - [ ] Under `unattended`, the PR description lists the deferred approvals
 - [ ] The repo's full test suite passes on the final commit, run with its own command
 - [ ] The relevant items in [definition-of-done](../../references/definition-of-done.md) hold

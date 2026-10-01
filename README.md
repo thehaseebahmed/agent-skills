@@ -9,7 +9,7 @@ The skills live in [`skills/`](skills/) — start with
 per-layer change inventory and a test-first task list — and
 [`tha-theseus`](skills/tha-theseus/SKILL.md), which builds or migrates work
 checkpoint by checkpoint behind enforced quality gates, in the manner of
-Shopify's Helix. See [skills/README.md](skills/README.md) to add another.
+Shopify's Helix, with a live local viewer where you watch and approve. See [skills/README.md](skills/README.md) to add another.
 
 ## Why skills and not a rules file
 

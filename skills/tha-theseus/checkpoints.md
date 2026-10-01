@@ -76,7 +76,7 @@ re-deriving:
 ```
 
 The script assigns the ids (`CP1`, `CP2`, …). Write titles and `done` in plain
-language: the human approves this list by reading `checkpoints.md`, and if they can't
+language: the human approves this list by reading it in the viewer, and if they can't
 follow it, they can't catch what it's missing.
 
 ## Questions

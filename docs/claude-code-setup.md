@@ -58,3 +58,18 @@ stderr back to the model — so the agent keeps going instead of declaring victo
 early. It lets the session stop while a checkpoint waits for human approval,
 gives up after three blocks per checkpoint, and exits 0 on any error, including
 a missing `node`.
+
+## Theseus viewer and agents
+
+- **Viewer:** `theseus.js serve` starts a local viewer on `127.0.0.1` and prints its
+  link. In Claude Code on your own machine, open it in a browser to follow the run and
+  approve checkpoints. In Claude Code on the web, the link points inside the cloud
+  container and is not reachable. Start those runs with `--approvals any` or
+  `--autonomy unattended`.
+- **Agents:** `theseus.js agents --target claude --planner-model opus` writes
+  `.claude/agents/theseus-planner.md` and `theseus-reviewer.md`. Subagent `model`
+  accepts `sonnet`, `opus`, `haiku`, `fable`, a full model ID, or `inherit`, as
+  documented at
+  [code.claude.com/docs/en/sub-agents](https://code.claude.com/docs/en/sub-agents)
+  (checked October 2026). With no model flag, the line is left out and the agent
+  inherits the session's model.

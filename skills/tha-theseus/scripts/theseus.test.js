@@ -11,7 +11,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { spawnSync, spawn } = require('node:child_process');
 
 const SCRIPT = path.join(__dirname, 'theseus.js');
 
@@ -43,7 +43,7 @@ function makeRepo() {
 }
 
 function commit(dir, message) {
-  sh(dir, 'git', ['add', '-A', '--', '.', ':(exclude)plans']);
+  sh(dir, 'git', ['add', '-A', '--', '.', ':(exclude).theseus']);
   sh(dir, 'git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', message]);
 }
 
@@ -74,7 +74,7 @@ function writeJsonFile(dir, name, value) {
 /** A repo with an approved two-checkpoint plan, CP1 begun. */
 function started(autonomy = 'step') {
   const dir = makeRepo();
-  ok(dir, 'init', '--key', 'HR-7', '--reference', 'docs/mock.html', '--test-cmd', 'node check.js', '--autonomy', autonomy);
+  ok(dir, 'init', '--key', 'HR-7', '--reference', 'docs/mock.html', '--test-cmd', 'node check.js', '--autonomy', autonomy, '--approvals', 'any');
   ok(dir, 'plan', '--file', writeJsonFile(os.tmpdir(), `cps-${process.pid}.json`, CHECKPOINTS));
   ok(dir, 'approve-plan', '--by', 'haseeb');
   ok(dir, 'begin', 'CP1');
@@ -95,7 +95,7 @@ test('the happy path reaches done and suggests the next checkpoint', () => {
   const dir = started();
   passGates(dir);
   const result = ok(dir, 'advance', 'CP1', '--approved-by', 'haseeb');
-  assert.match(result.out, /CP1 done \(approved by haseeb\)\. Commit it now\. Next: CP2/);
+  assert.match(result.out, /CP1 done \(approved by haseeb, reported by agent\)\. Commit it now\. Next: CP2/);
 });
 
 test('begin refuses a checkpoint the human has not approved', () => {
@@ -107,7 +107,7 @@ test('begin refuses a checkpoint the human has not approved', () => {
 
 test('checkpoints run in order', () => {
   const dir = makeRepo();
-  ok(dir, 'init', '--key', 'HR-7', '--reference', 'r', '--test-cmd', 'node check.js');
+  ok(dir, 'init', '--key', 'HR-7', '--reference', 'r', '--test-cmd', 'node check.js', '--approvals', 'any');
   ok(dir, 'plan', '--file', writeJsonFile(os.tmpdir(), `cps-${process.pid}.json`, CHECKPOINTS));
   ok(dir, 'approve-plan', '--by', 'h');
   refused(dir, /CP1 comes first and is not done/, 'begin', 'CP2');
@@ -239,7 +239,7 @@ test('batch autonomy lets one approval cover N checkpoints', () => {
   ok(dir, 'record', 'CP2', 'visual', '--reviewer', 'behave', '--findings', '0');
   ok(dir, 'record', 'CP2', 'review', '--reviewer', 'a', '--findings', '0');
   ok(dir, 'record', 'CP2', 'review', '--reviewer', 'b', '--findings', '0');
-  assert.match(ok(dir, 'advance', 'CP2').out, /CP2 done \(approved by h\)/);
+  assert.match(ok(dir, 'advance', 'CP2').out, /CP2 done \(approved by h, reported by agent, batch\)/);
 });
 
 test('unattended autonomy defers approval to the PR and status says so', () => {
@@ -266,13 +266,13 @@ test('begin refuses a dirty working tree', () => {
   refused(dir, /uncommitted changes — commit the previous checkpoint/, 'begin', 'CP2');
 });
 
-test('render lists every checkpoint with its gates and done-criteria', () => {
+test('status --json carries every checkpoint with its done-criteria and tests', () => {
   const dir = started();
-  const md = fs.readFileSync(path.join(dir, 'plans', 'theseus', 'current', 'checkpoints.md'), 'utf8');
-  assert.match(md, /\| CP1 \| Leave balance domain rule \| no \| yes \| building \|/);
-  assert.match(md, /\| CP2 \| Leave request form \| yes \| yes \| pending \|/);
-  assert.match(md, /\*\*Done when:\*\* form matches the mock in empty and error states/);
-  assert.match(md, /- shows the error state/);
+  const snap = JSON.parse(ok(dir, 'status', '--json').out);
+  assert.deepStrictEqual(snap.checkpoints.map(c => [c.id, c.status]), [['CP1', 'building'], ['CP2', 'pending']]);
+  assert.strictEqual(snap.checkpoints[1].done, 'form matches the mock in empty and error states');
+  assert.deepStrictEqual(snap.checkpoints[1].tests, ['shows the error state']);
+  assert.deepStrictEqual(snap.checkpoints[0].gates, { red: 'none', tests: 'none', visual: 'none', review: 'none' });
 });
 
 test('added checkpoints need approval and pass through every gate', () => {
@@ -284,10 +284,10 @@ test('added checkpoints need approval and pass through every gate', () => {
     { title: 'Tighten the error copy', done: 'error names the field', ui: false, tests: ['error mentions days'] },
   ]);
   assert.match(ok(dir, 'add', '--file', extra).out, /added CP3/);
-  const md = fs.readFileSync(path.join(dir, 'plans', 'theseus', 'current', 'checkpoints.md'), 'utf8');
-  assert.match(md, /_Added from human feedback\._/);
   const status = JSON.parse(ok(dir, 'status', '--json').out);
+  assert.strictEqual(status.checkpoints[2].origin, 'feedback');
   assert.strictEqual(status.checkpoints[2].approved, false);
+  refused(dir, /CP3 has not been approved by a human/, 'begin', 'CP3');
 });
 
 test('check blocks a stop only while gates are open, and gives up after three blocks', () => {
@@ -312,13 +312,123 @@ test('check exits 0 outside a run and outside git', () => {
   assert.strictEqual(theseus(fs.mkdtempSync(path.join(os.tmpdir(), 'nogit-')), 'check').code, 0);
 });
 
-test('learn appends a dated rule to learnings.md', () => {
+test('learn stores a rule in learnings.json and learnings prints it', () => {
   const dir = started();
   ok(dir, 'learn', '--cp', 'CP1', '--source', 'reviewer', 'inject the clock; never call Date.now in handlers');
-  const text = fs.readFileSync(path.join(dir, 'plans', 'theseus', 'learnings.md'), 'utf8');
-  assert.match(text, /- inject the clock; never call Date\.now in handlers _\(CP1, reviewer, \d{4}-\d{2}-\d{2}\)_/);
+  const stored = JSON.parse(fs.readFileSync(path.join(dir, '.theseus', 'learnings.json'), 'utf8'));
+  assert.deepStrictEqual(stored.map(l => [l.text, l.cp, l.source]), [['inject the clock; never call Date.now in handlers', 'CP1', 'reviewer']]);
+  assert.strictEqual(ok(dir, 'learnings').out, '- inject the clock; never call Date.now in handlers\n');
 });
 
 test('archive refuses an unfinished run', () => {
   refused(started(), /only a finished run can be archived/, 'archive');
+});
+
+test('init creates .theseus in the working directory, and commands find it from a subfolder', () => {
+  const dir = makeRepo();
+  ok(dir, 'init', '--key', 'HR-7', '--reference', 'r', '--test-cmd', 'node check.js');
+  assert.ok(fs.existsSync(path.join(dir, '.theseus', 'current', 'run.json')));
+  assert.strictEqual(fs.readFileSync(path.join(dir, '.theseus', '.gitignore'), 'utf8'), 'server.json\nserver.log\n*.tmp\n');
+  const sub = path.join(dir, 'src', 'deep');
+  fs.mkdirSync(sub, { recursive: true });
+  assert.match(ok(sub, 'status').out, /theseus: HR-7 — autonomy step, approvals viewer/);
+});
+
+test('a second init anywhere inside an active run is refused', () => {
+  const dir = makeRepo();
+  ok(dir, 'init', '--key', 'HR-7', '--reference', 'r', '--test-cmd', 'node check.js');
+  const sub = path.join(dir, 'sub');
+  fs.mkdirSync(sub);
+  refused(sub, /a run is already active \(key HR-7\)/, 'init', '--key', 'X', '--reference', 'r', '--test-cmd', 'c');
+});
+
+test('commands outside a run say there is no active run', () => {
+  refused(makeRepo(), /no active theseus run/, 'status');
+});
+
+test('viewer approval mode refuses approvals typed on the command line', () => {
+  const dir = makeRepo();
+  ok(dir, 'init', '--key', 'HR-7', '--reference', 'r', '--test-cmd', 'node check.js');
+  ok(dir, 'plan', '--file', writeJsonFile(os.tmpdir(), `cps-${process.pid}.json`, CHECKPOINTS));
+  refused(dir, /approve in the viewer — this run only accepts approvals the human clicks there/, 'approve-plan', '--by', 'me');
+});
+
+test('viewer approval mode refuses advance --approved-by but still parks the checkpoint for the human', async () => {
+  const dir = makeRepo();
+  ok(dir, 'init', '--key', 'HR-7', '--reference', 'r', '--test-cmd', 'node check.js');
+  ok(dir, 'plan', '--file', writeJsonFile(os.tmpdir(), `cps-${process.pid}.json`, CHECKPOINTS));
+  const core = require('./theseus');
+  core.approvePlan(core.resolvePaths(dir), { by: 'human (viewer)', source: 'viewer' });
+  ok(dir, 'begin', 'CP1');
+  passGates(dir);
+  refused(dir, /approve in the viewer/, 'advance', 'CP1', '--approved-by', 'me');
+  refused(dir, /waiting for human approval \(autonomy: step\)\. Ask the human to approve it in the viewer, then: theseus\.js wait/, 'advance', 'CP1');
+});
+
+test('any approval mode records CLI approvals as reported by the agent', () => {
+  const dir = started();
+  passGates(dir);
+  ok(dir, 'advance', 'CP1', '--approved-by', 'h');
+  const snap = JSON.parse(ok(dir, 'status', '--json').out);
+  assert.deepStrictEqual(snap.checkpoints[0].approval, { by: 'h', source: 'cli' });
+  assert.deepStrictEqual(snap.warnings.cliApprovals, ['CP1']);
+});
+
+test('wait times out with a clear message when the human has not acted', () => {
+  refused(started(), /no approval or feedback yet after 1s/, 'wait', '--timeout', '1');
+});
+
+test('wait returns when the human approves in the viewer', async () => {
+  const dir = started();
+  passGates(dir);
+  refused(dir, /waiting for human approval/, 'advance', 'CP1');
+  const waiting = spawn(process.execPath, [SCRIPT, 'wait', '--timeout', '20'], { cwd: dir, env: env() });
+  let out = '';
+  waiting.stdout.on('data', chunk => { out += chunk; });
+  await new Promise(resolve => setTimeout(resolve, 700));
+  const core = require('./theseus');
+  core.advance(core.resolvePaths(dir), 'CP1', { by: 'human (viewer)', source: 'viewer' });
+  const code = await new Promise(resolve => waiting.on('exit', resolve));
+  assert.strictEqual(code, 0);
+  assert.match(out, /theseus: CP1 approved/);
+});
+
+test('inbox prints unread feedback once', () => {
+  const dir = started();
+  const core = require('./theseus');
+  core.addFeedback(core.resolvePaths(dir), { cp: null, text: 'make the error copy friendlier' });
+  assert.match(ok(dir, 'inbox').out, /- \[general\] make the error copy friendlier/);
+  assert.match(ok(dir, 'inbox').out, /no unread feedback/);
+});
+
+test('agents writes Claude and Copilot files with a single-string model and the brief as body', () => {
+  const dir = makeRepo();
+  const out = ok(dir, 'agents', '--planner-model', 'opus', '--planner-model-copilot', 'Claude Opus 4.5 (copilot)').out;
+  assert.match(out, /wrote \.claude\/agents\/theseus-planner\.md \(model "opus"\)/);
+  const claude = fs.readFileSync(path.join(dir, '.claude', 'agents', 'theseus-planner.md'), 'utf8');
+  const copilot = fs.readFileSync(path.join(dir, '.github', 'agents', 'theseus-planner.agent.md'), 'utf8');
+  assert.match(claude, /^---\nname: theseus-planner\ndescription: ".+"\ntools: Read, Grep, Glob\nmodel: "opus"\n---\n/);
+  assert.match(copilot, /^---\nname: theseus-planner\ndescription: ".+"\ntools: \['read', 'search'\]\nmodel: "Claude Opus 4\.5 \(copilot\)"\n---\n/);
+  const brief = fs.readFileSync(path.join(__dirname, '..', 'checkpoints.md'), 'utf8').trim();
+  assert.ok(claude.trimEnd().endsWith(brief), 'planner body is the checkpoints.md brief');
+  const reviewer = fs.readFileSync(path.join(dir, '.claude', 'agents', 'theseus-reviewer.md'), 'utf8');
+  assert.match(reviewer, /## You are an adversarial reviewer/);
+  assert.doesNotMatch(reviewer, /Hand this file \*\*verbatim\*\*/);
+});
+
+test('agents omits model when none is given, so the agent inherits the session model', () => {
+  const dir = makeRepo();
+  assert.match(ok(dir, 'agents', '--target', 'claude').out, /theseus-reviewer\.md \(inherits the session model\)/);
+  assert.doesNotMatch(fs.readFileSync(path.join(dir, '.claude', 'agents', 'theseus-reviewer.md'), 'utf8'), /^model:/m);
+  assert.ok(!fs.existsSync(path.join(dir, '.github', 'agents')));
+});
+
+test('agents refuses to overwrite an agent file it did not generate', () => {
+  const dir = makeRepo();
+  fs.mkdirSync(path.join(dir, '.github', 'agents'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.github', 'agents', 'theseus-planner.agent.md'), 'hand written\n');
+  refused(dir, /\.github\/agents\/theseus-planner\.agent\.md exists and was not generated by theseus/, 'agents');
+  assert.ok(!fs.existsSync(path.join(dir, '.claude', 'agents', 'theseus-planner.md')), 'nothing written on refusal');
+  ok(dir, 'agents', '--target', 'claude');
+  ok(dir, 'agents', '--target', 'claude', '--planner-model', 'haiku');
 });

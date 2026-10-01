@@ -45,7 +45,7 @@ ignores the state directory.
    submitted form with an untouched one produces noise, not findings.
 2. **Capture** both at the same viewport size, using whatever drives the UI in this
    repo (Playwright, a simulator, a browser tool). Save the screenshots under
-   `plans/theseus/current/evidence/<CP>/`.
+   `.theseus/current/evidence/<CP>/`, where the viewer shows them side by side.
 3. **Two blind reviewers**, in separate subagents. Each is given only:
    - the reference capture
    - the build capture
@@ -81,7 +81,7 @@ reviewers still work.
   - [reviewer.md](reviewer.md)
   - the checkpoint's diff (`git diff <base>`, where `base` is in `checkpoints.json`)
   - the architecture docs named at `init`
-  - `learnings.md`
+  - the output of `theseus learnings`
 
   Not the plan, not the builder's notes, not your summary.
 - Each returns a verdict. Record it:
@@ -91,7 +91,7 @@ reviewers still work.
 
 ### When there are findings
 
-1. A fresh **fixer** subagent gets the findings, the diff and `learnings.md`, and
+1. A fresh **fixer** subagent gets the findings, the diff and the learnings, and
    fixes all of them. Not the builder: a context that wrote the code tends to defend
    it.
 2. Re-run gate 1: `record CP tests`. The fix changed the fingerprint, so this is
@@ -101,26 +101,30 @@ reviewers still work.
 5. Repeat until both are clean.
 
 If a reviewer and the human disagree about a rule, the human decides. Update the
-architecture doc or `learnings.md`, then re-review. Never mark a finding "won't fix"
+architecture doc or the learnings (`theseus learn`), then re-review. Never mark a finding "won't fix"
 on your own authority.
 
 ## Gate 4: Human
 
 **Requires** gates 1–3 passed at the current code (enforced by `advance`).
 
-| Autonomy | `advance CP` without `--approved-by` |
+| Autonomy | `advance CP` |
 |---|---|
-| `step` | stops at `awaiting-approval` (exit 1) |
-| `batch:N` | succeeds while approval credit remains from the last `--approved-by`; otherwise stops |
+| `step` | stops at `awaiting-approval` (exit 1) until the human approves |
+| `batch:N` | succeeds while approval credit remains from the human's last approval; otherwise stops |
 | `unattended` | succeeds; approval is recorded as deferred to PR review |
 
-When stopping for approval, show the human:
-- the diff
-- the gate 1 test output tail
-- both reviewers' notes
-- for UI checkpoints, the paired screenshots
+**Where the approval comes from:**
+- **`--approvals viewer` (default):** the human clicks **Approve** in the viewer,
+  which already shows the test output, the reviewers' notes and, for UI checkpoints,
+  the paired screenshots. The agent runs `theseus wait`. Approvals typed on the CLI
+  are refused.
+- **`--approvals any`:** the human may approve in chat instead, recorded with
+  `advance CP --approved-by NAME`. These are marked "reported by agent".
+- **The viewer re-checks every gate at the current code before approving.** A
+  checkpoint whose code changed after review cannot be approved there either.
 
-Their feedback is distilled into `learnings.md` either way. Change requests become new
+Their feedback is distilled into the learnings either way. Change requests become new
 checkpoints via `add`; they are not patched in silently.
 
 ## Isolation
