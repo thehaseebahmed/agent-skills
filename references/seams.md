@@ -2,6 +2,7 @@
 
 The seam is the line between "runs for real" and "substituted". Get it in the right
 place and the tests describe behaviour; get it wrong and they describe implementation.
+The principles behind choosing a test double are in [testing-patterns](testing-patterns.md).
 
 ## The rule
 
@@ -94,7 +95,7 @@ the module under test.
 The tool handler is the entry point. Call it the way the transport would — name plus
 argument object — and assert the returned content and `isError`. Substitute the upstream
 client. If the server has a request-ordering invariant (a mutex, a cache), the
-out-of-order and repeated-call cases belong in the catalogue.
+out-of-order and repeated-call cases belong in the planned tests.
 
 ### CLI
 
@@ -105,7 +106,7 @@ give it a temp working directory. Assert on output text, exit code, and files wr
 
 The public API *is* the entry point. Substitution is usually limited to the clock and
 randomness. Resist testing private helpers — if one is complex enough to need its own
-tests, it probably wants to be public API with its own catalogue section.
+tests, it probably wants to be public API with its own planned tests.
 
 ## In an unfamiliar stack
 
@@ -115,8 +116,8 @@ Ask three questions:
 2. **What in this process talks to something outside it?** Those are the only
    substitutions.
 3. **How does the repo already do this?** An existing fixture or factory beats a new
-   harness. Name it in the plan's Harness line and reuse it.
+   harness. Name it, by path, alongside the planned tests and reuse it.
 
 If the codebase offers no seam — no dependency injection, adapters constructed inline —
-say so in the plan's Risks section and make "introduce the seam" the first task, rather
+say so to the human and make "introduce the seam" the first piece of work, rather
 than quietly widening the tests to reach real infrastructure.

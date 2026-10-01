@@ -1,6 +1,6 @@
 ---
 name: tha-theseus
-description: Build, port, or migrate work one small checkpoint at a time, where no checkpoint may start until the last one has passed four enforced gates — failing-then-passing tests, a visual match against the reference, two independent context-isolated adversarial reviewers, and human approval — with every piece of feedback kept in a learnings file that later checkpoints read. Use when asked to migrate or port a screen, module or app to a new stack, rebuild something while keeping its behaviour identical, build a large feature under strict quality gates, run a Helix-style or checkpoint-and-gate loop, or keep an agent working for hours without its quality drifting. Not for deciding what to build — that is tha-planning.
+description: Build, port, or migrate work one small checkpoint at a time, where no checkpoint may start until the last one has passed four enforced gates — failing-then-passing tests, a visual match against the reference, two independent context-isolated adversarial reviewers, and human approval — with every piece of feedback kept in a learnings file that later checkpoints read. Use when asked to migrate or port a screen, module or app to a new stack, rebuild something while keeping its behaviour identical, build a large feature under strict quality gates, run a Helix-style or checkpoint-and-gate loop, or keep an agent working for hours without its quality drifting. Not for one-off edits or throwaway spikes.
 ---
 
 # THA Theseus
@@ -53,8 +53,8 @@ verdict, screenshot and learning as it happens, and it is where the human approv
 - Any request for a "Helix", checkpoint-and-gate, or "gated" build loop
 
 **When NOT to use:**
-- Deciding *what* to build, or producing a per-layer change inventory. That is
-  `tha-planning`. Theseus executes; it does not scope.
+- Deciding *what* to build. Theseus needs a known goal and a reference; if the goal
+  is still open, settle it with the human first. Theseus executes; it does not scope.
 - A one-file fix, a config change, or anything you would review in one sitting. The
   gates cost more than they save.
 - Exploratory spikes whose code will be thrown away.

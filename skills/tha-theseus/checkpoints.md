@@ -27,11 +27,11 @@ Each checkpoint builds on the ones before it, so order by **increasing complexit
 
 A wrong early decision is then caught while it is still small and cheap to change.
 
-This deliberately differs from `tha-planning`, which orders slices **riskiest first**
-to fail fast on uncertainty. The two answer different questions. A plan decides
-whether the work is feasible; a checkpoint sequence assumes it is and minimises the
-cost of rework. If a large risk is still open, it belongs in planning before Theseus
-starts.
+This is not "riskiest first". A checkpoint sequence assumes the work is feasible and
+minimises the cost of rework; it is not the place to find out whether the work can be
+done at all. If a large risk is still open (an unproven library, an unknown API, a
+performance question), settle it with the human, with a spike if needed, before
+Theseus starts.
 
 ## From a reference
 
@@ -42,12 +42,32 @@ starts.
 | Design mock or prototype | One checkpoint per component, then per composed region, then interactions |
 | Written spec | One checkpoint per acceptance criterion, split until each is XS–S |
 
-If a `tha-planning` `tasks.md` exists for this work, seed from it rather than
-re-deriving:
+If the human already has a task list or ticket breakdown, seed from it rather than
+re-deriving: each task becomes one or more checkpoints, and anything larger than S is
+split.
 
-- each task becomes one or more checkpoints
-- anything larger than S is split
-- its test IDs (`T1.4`) go into `tests`
+## Writing the tests
+
+The test planner fills each checkpoint's `tests`. Every case should drive the
+**outermost in-process entry point** a real caller would reach: the route, command,
+tool handler or public function. It asserts only what is observable there:
+
+- output
+- status
+- error shape
+- state visible through the substituted boundary
+
+Substitute only what leaves the process: database, network, clock, randomness,
+filesystem. A case whose expected result can only be stated as "calls X internally" is
+asserting an implementation detail. Rewrite it.
+
+- Happy paths come first.
+- Then the unhappy paths: invalid input, missing resource, permission, conflict,
+  dependency failure, boundaries.
+
+Per-stack recipes (ASP.NET, FastAPI, Express, MCP, CLI) are in
+[seams](../../references/seams.md). The reasoning behind the choice of test double is
+in [testing-patterns](../../references/testing-patterns.md).
 
 ## Output format
 

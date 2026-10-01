@@ -22,7 +22,6 @@ const CHECKPOINTS = [
 
 function env() {
   const copy = { ...process.env };
-  delete copy.THA_PLANS_DIR;
   delete copy.CLAUDE_PROJECT_DIR;
   return copy;
 }
@@ -409,8 +408,10 @@ test('agents writes Claude and Copilot files with a single-string model and the 
   const copilot = fs.readFileSync(path.join(dir, '.github', 'agents', 'theseus-planner.agent.md'), 'utf8');
   assert.match(claude, /^---\nname: theseus-planner\ndescription: ".+"\ntools: Read, Grep, Glob\nmodel: "opus"\n---\n/);
   assert.match(copilot, /^---\nname: theseus-planner\ndescription: ".+"\ntools: \['read', 'search'\]\nmodel: "Claude Opus 4\.5 \(copilot\)"\n---\n/);
-  const brief = fs.readFileSync(path.join(__dirname, '..', 'checkpoints.md'), 'utf8').trim();
-  assert.ok(claude.trimEnd().endsWith(brief), 'planner body is the checkpoints.md brief');
+  assert.match(claude, /## Writing the tests/, 'planner body is the checkpoints.md brief');
+  const seams = path.resolve(__dirname, '..', '..', '..', 'references', 'seams.md');
+  assert.ok(claude.includes(`[seams](${seams})`), 'relative links are rewritten to the real file');
+  assert.doesNotMatch(claude, /\]\(\.\.\//, 'no relative links survive in the agent body');
   const reviewer = fs.readFileSync(path.join(dir, '.claude', 'agents', 'theseus-reviewer.md'), 'utf8');
   assert.match(reviewer, /## You are an adversarial reviewer/);
   assert.doesNotMatch(reviewer, /Hand this file \*\*verbatim\*\*/);

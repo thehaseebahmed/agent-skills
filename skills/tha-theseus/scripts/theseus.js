@@ -965,7 +965,15 @@ function agentBody(role) {
   const text = fs.readFileSync(path.join(__dirname, '..', AGENTS[role].source), 'utf8');
   // reviewer.md opens with a note for the orchestrator, above a `---` rule; the agent gets only the brief below it.
   const rule = text.search(/^---$/m);
-  return (role === 'reviewer' && rule !== -1 ? text.slice(rule + 4) : text).trim();
+  const body = (role === 'reviewer' && rule !== -1 ? text.slice(rule + 4) : text).trim();
+  // Relative links are relative to the skill, not to .claude/agents/ or .github/agents/
+  // where this body lands. Point them at the real file, or keep just the text if it is absent.
+  const skillDir = path.join(__dirname, '..');
+  return body.replace(/\[([^\]]*)\]\(([^)\s#]+)(#[^)\s]*)?\)/g, (match, label, target, anchor = '') => {
+    if (/^[a-z][a-z0-9+.-]*:/i.test(target) || path.isAbsolute(target)) return match;
+    const full = path.resolve(skillDir, target);
+    return fs.existsSync(full) ? `[${label}](${full}${anchor})` : label;
+  });
 }
 
 function agentFile(target, role, model) {
