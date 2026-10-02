@@ -18,7 +18,7 @@ const http = require('node:http');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
-const { GateError, snapshot, approvePlan, advance, addFeedback, setSettings, doneMessage, IMAGE_TYPES } = require('./theseus');
+const { GateError, snapshot, approvePlan, advance, addFeedback, setSettings, doneMessage, approveBrief, listRuns, findRun, withRunDir, switchRun, closeRun, IMAGE_TYPES } = require('./theseus');
 
 const PAGE = path.join(__dirname, 'viewer.html');
 const TICK_MS = 1000;
@@ -79,11 +79,18 @@ function startServer(p, { port = 0, token = crypto.randomBytes(16).toString('hex
   const clients = new Set();
   let last = '';
 
+  const runs = () => listRuns(p).map(({ dir, ...rest }) => rest);
+
+  // With no active run (all closed or paused), still send the run list so the page can offer them.
   const current = () => {
     try {
       return JSON.stringify(snapshot(p));
     } catch (error) {
-      return JSON.stringify({ error: error.message });
+      try {
+        return JSON.stringify({ error: error.message, runs: runs() });
+      } catch {
+        return JSON.stringify({ error: error.message, runs: [] });
+      }
     }
   };
 
@@ -111,7 +118,13 @@ function startServer(p, { port = 0, token = crypto.randomBytes(16).toString('hex
 
     try {
       if (req.method === 'GET' && route === '/api/health') return send(res, 200, { ok: true });
-      if (req.method === 'GET' && route === '/api/state') return send(res, 200, current());
+      if (req.method === 'GET' && route === '/api/state') {
+        const key = url.searchParams.get('run');
+        if (!key) return send(res, 200, current());
+        const found = findRun(p, key);
+        return send(res, 200, JSON.stringify(found.active ? snapshot(p) : snapshot(withRunDir(p, found.dir))));
+      }
+      if (req.method === 'GET' && route === '/api/runs') return send(res, 200, runs());
       if (req.method === 'GET' && route === '/api/events') {
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
         res.write(`data: ${current()}\n\n`);
@@ -140,9 +153,28 @@ function startServer(p, { port = 0, token = crypto.randomBytes(16).toString('hex
       }
       if (req.method === 'POST' && route === '/api/feedback') {
         const body = await readBody(req);
-        const { reopened } = addFeedback(p, { cp: body.cp || null, text: body.text });
+        const { reopened, brief } = addFeedback(p, { cp: body.cp || null, text: body.text, brief: body.brief === true });
         broadcast(true);
-        return send(res, 200, { ok: true, message: reopened ? `Changes requested — ${body.cp} is back to building.` : 'Feedback sent to the agent.' });
+        const message = brief ? 'Changes requested on the brief — the agent revises it before any planning.'
+          : reopened ? `Changes requested — ${body.cp} is back to building.` : 'Feedback sent to the agent.';
+        return send(res, 200, { ok: true, message });
+      }
+      if (req.method === 'POST' && route === '/api/approve-brief') {
+        approveBrief(p, { by: 'human (viewer)', source: 'viewer' });
+        broadcast(true);
+        return send(res, 200, { ok: true, message: 'Brief confirmed — the agent can now research and plan the checkpoints.' });
+      }
+      if (req.method === 'POST' && route === '/api/switch') {
+        const body = await readBody(req);
+        const from = switchRun(p, String(body.key || ''), { source: 'viewer' });
+        broadcast(true);
+        return send(res, 200, { ok: true, message: `${body.key} is now the active run${from ? `; ${from} is paused` : ''}.` });
+      }
+      if (req.method === 'POST' && route === '/api/close') {
+        const body = await readBody(req);
+        const result = closeRun(p, body.decision, { source: 'viewer', by: 'human (viewer)' });
+        broadcast(true);
+        return send(res, 200, { ok: true, message: result.kept ? 'Kept open.' : `Run ${result.summary.key} ${result.final}. Its summary is in History.` });
       }
       return send(res, 404, { error: 'not found' });
     } catch (error) {

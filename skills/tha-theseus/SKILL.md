@@ -104,20 +104,25 @@ without it.
 State lives in `.theseus/`, in the directory you run `theseus init` from. Commands
 find it from any subfolder.
 
-- `.theseus/current/` holds the active run.
-- `.theseus/learnings.json` is the memory, and outlives every run.
+- `.theseus/current/` holds the active run, `.theseus/runs/` the paused ones, and
+  `.theseus/archive/` the closed ones (completed or abandoned, each with a
+  `summary.json`).
+- `.theseus/learnings.json` is the memory, shared by every run.
 
-Never edit either by hand.
+Never edit any of it by hand.
 
 ```bash
+theseus runs       # every run: active, paused, closed
 theseus status
 ```
 
-- **There is an active run:** run `theseus serve`, give the human the link, and resume
-  at the step `next:` names. Never start a second run.
-- **There is none:** go to Step 1.
+- **The request continues an active or paused run:** `theseus switch KEY` if needed,
+  run `theseus serve`, give the human the link, and resume at the step `next:` names.
+- **The request is new work:** go to Step 1. `init` pauses the active run, which
+  `switch` resumes later. Switching and starting runs are refused while a checkpoint
+  is in progress: two runs can't build in one working tree at once.
 
-### Step 1: Pin the reference and the rules
+### Step 1a: Pin the reference and the rules
 
 Settle these with the human before anything else:
 
@@ -204,6 +209,36 @@ theseus serve
 `serve` starts the viewer in the background and prints its link. **Give the human the
 link now.** It is how they follow the run and how they approve.
 
+### Step 1b: The brief — confirm understanding before any deep work
+
+Do a **light recon only**, inline, with no subagents:
+- read the reference (the spec, the mock, or a skim of the legacy screen)
+- read the repo's top-level layout and README
+
+Stop there. Then write a brief and submit it:
+
+```json
+{
+  "goal": "one or two sentences: what this run achieves",
+  "understanding": "in plain words, what you believe is being asked",
+  "areas": ["what you will create checkpoints for — the human checks nothing is missing"],
+  "in_scope": [], "out_of_scope": [], "assumptions": [], "questions": []
+}
+```
+
+```bash
+theseus brief --file brief.json
+theseus wait     # the human confirms it, or requests changes, in the viewer
+```
+
+- **Changes requested:** read them (`theseus inbox`), revise, and submit again.
+- **`plan` is refused** until the brief is confirmed.
+- **Under `--approvals any`**, a confirmation given in chat is recorded with
+  `theseus approve-brief --by <name>`.
+
+Only after confirmation do the expensive work: pre-flight, deep reading and the
+planner subagent.
+
 **Pre-flight:** a subagent confirms that the test command runs and that the app (and
 the reference app, if there is one) starts. Gates mean nothing on a project that is
 already broken. Fix that first, or tell the human.
@@ -211,7 +246,8 @@ already broken. Fix that first, or tell the human.
 ### Step 2: Plan the checkpoints, with their tests
 
 Dispatch the **checkpoint planner** (`theseus-planner`, if you generated it) with
-[checkpoints.md](checkpoints.md) and the reference. It returns an ordered list:
+[checkpoints.md](checkpoints.md), the reference and the **confirmed brief**. Every
+`areas` item must be covered by the checkpoints, or the planner must say why not. It returns an ordered list:
 
 - checkpoints at the run's size (`plan` prints it): XS–S or S–M
 - smallest and most foundational first
@@ -322,9 +358,18 @@ When every checkpoint is done, the human tries the whole feature as a user would
   `theseus inbox`, turn them into new checkpoints with `theseus add --file`, and wait
   for the human to approve them in the viewer. Then they go through the same loop.
   Each request is also distilled into a learning.
-- **When nothing is left:** run `theseus archive`, then `theseus stop` to shut the
-  viewer down. Under `unattended`, the PR description lists every deferred approval
-  from `theseus status`.
+- **When nothing is left:** run `theseus complete`. The human confirms it in the
+  viewer (or keeps the run open). Then:
+  - a `summary.json` is saved
+  - the run moves to History
+  - run `theseus stop` if no other run needs the viewer
+
+  Under `unattended`, the PR description lists every deferred approval from
+  `theseus status`.
+- **Stopping early:** `theseus abandon --reason "…"`. The human confirms this too,
+  and the reason is kept in the summary.
+- **Under `--approvals any`**, `complete` and `abandon` take `--approved-by <name>`
+  for a confirmation given in chat.
 
 ### Enforcement in Claude Code
 
@@ -341,6 +386,7 @@ Other harnesses rely on the script's refusals alone.
 
 | Rationalization | Reality |
 |---|---|
+| "I'll research properly first so the brief is accurate" | The brief exists to catch a wrong understanding *before* that cost is spent. Light recon, brief, confirmation — then research |
 | "The reviewer's finding is just a nit" | Every finding is fixed or the gate stays shut. If a rule is wrong, change the architecture doc with the human, then re-review. Don't argue it away mid-checkpoint |
 | "I fixed it after the review; it's obviously fine" | The fix is new code nobody has reviewed. The fingerprint check exists because this is the commonest way bad code ships |
 | "The tests pass, so the UI is fine" | Gate 1 proves behaviour. Spacing, states and interaction are gate 2's job, and they drift silently |

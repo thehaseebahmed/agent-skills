@@ -39,6 +39,15 @@ function ok(dir, ...args) {
   return r;
 }
 
+/** Every run started by this version needs a confirmed brief before it can plan. */
+function confirmBrief(dir) {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'theseus-brief-')), 'brief.json');
+  fs.writeFileSync(file, JSON.stringify({ goal: 'g', understanding: 'u', areas: ['a'] }));
+  ok(dir, 'brief', '--file', file);
+  const core = require('./theseus');
+  core.approveBrief(core.resolvePaths(dir), { by: 'human (viewer)', source: 'viewer' });
+}
+
 function git(dir, ...args) {
   const r = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args], { cwd: dir, encoding: 'utf8' });
   assert.strictEqual(r.status, 0, r.stderr);
@@ -54,6 +63,7 @@ function planned() {
   ok(dir, 'init', '--key', 'HR-7', '--reference', 'mock.html', '--test-cmd', 'node check.js');
   const file = path.join(dir, '..', `cps-${path.basename(dir)}.json`);
   fs.writeFileSync(file, JSON.stringify(CHECKPOINTS));
+  confirmBrief(dir);
   ok(dir, 'plan', '--file', file);
   return dir;
 }

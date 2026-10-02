@@ -57,6 +57,15 @@ function ok(dir, ...args) {
   return result;
 }
 
+/** Every run started by this version needs a confirmed brief before it can plan. */
+function confirmBrief(dir) {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'theseus-brief-')), 'brief.json');
+  fs.writeFileSync(file, JSON.stringify({ goal: 'g', understanding: 'u', areas: ['a'] }));
+  ok(dir, 'brief', '--file', file);
+  const core = require('./theseus');
+  core.approveBrief(core.resolvePaths(dir), { by: 'human (viewer)', source: 'viewer' });
+}
+
 function refused(dir, pattern, ...args) {
   const result = theseus(dir, ...args);
   assert.strictEqual(result.code, 1, `expected theseus ${args.join(' ')} to fail, got ${result.code}: ${result.out}`);
@@ -74,6 +83,7 @@ function writeJsonFile(dir, name, value) {
 function started(autonomy = 'step') {
   const dir = makeRepo();
   ok(dir, 'init', '--key', 'HR-7', '--reference', 'docs/mock.html', '--test-cmd', 'node check.js', '--autonomy', autonomy, '--approvals', 'any');
+  confirmBrief(dir);
   ok(dir, 'plan', '--file', writeJsonFile(os.tmpdir(), `cps-${process.pid}.json`, CHECKPOINTS));
   ok(dir, 'approve-plan', '--by', 'haseeb');
   ok(dir, 'begin', 'CP1');
@@ -100,6 +110,7 @@ test('the happy path reaches done and suggests the next checkpoint', () => {
 test('begin refuses a checkpoint the human has not approved', () => {
   const dir = makeRepo();
   ok(dir, 'init', '--key', 'HR-7', '--reference', 'r', '--test-cmd', 'node check.js');
+  confirmBrief(dir);
   ok(dir, 'plan', '--file', writeJsonFile(os.tmpdir(), `cps-${process.pid}.json`, CHECKPOINTS));
   refused(dir, /CP1 has not been approved by a human/, 'begin', 'CP1');
 });
@@ -107,6 +118,7 @@ test('begin refuses a checkpoint the human has not approved', () => {
 test('checkpoints run in order', () => {
   const dir = makeRepo();
   ok(dir, 'init', '--key', 'HR-7', '--reference', 'r', '--test-cmd', 'node check.js', '--approvals', 'any');
+  confirmBrief(dir);
   ok(dir, 'plan', '--file', writeJsonFile(os.tmpdir(), `cps-${process.pid}.json`, CHECKPOINTS));
   ok(dir, 'approve-plan', '--by', 'h');
   refused(dir, /CP1 comes first and is not done/, 'begin', 'CP2');
@@ -116,6 +128,7 @@ test('plan refuses a checkpoint without planned tests', () => {
   const dir = makeRepo();
   ok(dir, 'init', '--key', 'HR-7', '--reference', 'r', '--test-cmd', 'node check.js');
   const bad = writeJsonFile(os.tmpdir(), `bad-${process.pid}.json`, [{ title: 'x', done: 'y', ui: false, tests: [] }]);
+  confirmBrief(dir);
   refused(dir, /has no tests — plan the test cases before the human approves/, 'plan', '--file', bad);
 });
 
@@ -348,6 +361,7 @@ test('commands outside a run say there is no active run', () => {
 test('viewer approval mode refuses approvals typed on the command line', () => {
   const dir = makeRepo();
   ok(dir, 'init', '--key', 'HR-7', '--reference', 'r', '--test-cmd', 'node check.js');
+  confirmBrief(dir);
   ok(dir, 'plan', '--file', writeJsonFile(os.tmpdir(), `cps-${process.pid}.json`, CHECKPOINTS));
   refused(dir, /approve in the viewer — this run only accepts approvals the human clicks there/, 'approve-plan', '--by', 'me');
 });
@@ -355,6 +369,7 @@ test('viewer approval mode refuses approvals typed on the command line', () => {
 test('viewer approval mode refuses advance --approved-by but still parks the checkpoint for the human', async () => {
   const dir = makeRepo();
   ok(dir, 'init', '--key', 'HR-7', '--reference', 'r', '--test-cmd', 'node check.js');
+  confirmBrief(dir);
   ok(dir, 'plan', '--file', writeJsonFile(os.tmpdir(), `cps-${process.pid}.json`, CHECKPOINTS));
   const core = require('./theseus');
   core.approvePlan(core.resolvePaths(dir), { by: 'human (viewer)', source: 'viewer' });
@@ -509,6 +524,7 @@ test('a change made in the viewer is announced once on the next CLI command', ()
 test('a checkpoint waiting for approval advances once the human switches to unattended', () => {
   const dir = makeRepo();
   ok(dir, 'init', '--key', 'HR-7', '--reference', 'r', '--test-cmd', 'node check.js');
+  confirmBrief(dir);
   ok(dir, 'plan', '--file', writeJsonFile(os.tmpdir(), `cps-${process.pid}.json`, CHECKPOINTS));
   const core = require('./theseus');
   const p = core.resolvePaths(dir);

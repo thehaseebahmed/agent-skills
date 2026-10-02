@@ -34,6 +34,15 @@ function ok(dir, ...args) {
   return r;
 }
 
+/** Every run started by this version needs a confirmed brief before it can plan. */
+function confirmBrief(dir) {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'theseus-brief-')), 'brief.json');
+  fs.writeFileSync(file, JSON.stringify({ goal: 'g', understanding: 'u', areas: ['a'] }));
+  ok(dir, 'brief', '--file', file);
+  const core = require('./theseus');
+  core.approveBrief(core.resolvePaths(dir), { by: 'human (viewer)', source: 'viewer' });
+}
+
 function refused(dir, pattern, ...args) {
   const r = theseus(dir, ...args);
   assert.strictEqual(r.code, 1, `expected theseus ${args.join(' ')} to fail, got ${r.code}: ${r.out}`);
@@ -56,6 +65,7 @@ function started(extra = [], { approvals = 'any' } = {}) {
   ok(dir, 'init', '--key', 'R', '--reference', 'mock.html', '--test-cmd', 'node check.js', '--approvals', approvals, ...extra);
   const plan = path.join(path.dirname(dir), `plan-${path.basename(dir)}.json`);
   fs.writeFileSync(plan, JSON.stringify([{ title: 'Form', done: 'matches the mock', ui: true, tests: ['error state'] }]));
+  confirmBrief(dir);
   ok(dir, 'plan', '--file', plan);
   core.approvePlan(core.resolvePaths(dir), { by: 'human (viewer)', source: 'viewer' });
   ok(dir, 'begin', 'CP1');

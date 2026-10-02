@@ -3,6 +3,11 @@
 The brief for the `theseus-planner` subagent: it plans the checkpoints and their tests. The output is a JSON
 array that `theseus plan --file` loads.
 
+You are also given the run's **confirmed brief**. The human agreed to it, so every item
+in its `areas` must be covered by at least one checkpoint. If one can't be, say which
+and why, rather than dropping it silently. Anything in `out_of_scope` gets no
+checkpoint.
+
 ## What a checkpoint is
 
 One small, ordered unit of work, finished and verified before the next begins.

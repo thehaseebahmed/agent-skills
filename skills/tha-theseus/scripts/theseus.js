@@ -57,6 +57,8 @@ const USAGE = `usage: theseus.js <command> [args]
   stop                                stop the viewer
   plan --file checkpoints.json        load the checkpoint list (replaces an unstarted plan)
   add --file checkpoints.json         append checkpoints, e.g. from human feedback
+  brief --file brief.json             what the agent understood; the human confirms it before any planning
+  approve-brief --by NAME             CLI brief confirmation (refused when --approvals viewer)
   approve-plan --by NAME              CLI plan approval (refused when --approvals viewer)
   begin CP                            start a checkpoint (needs a clean tree)
   record CP red   [--cmd C]           run the tests; they must FAIL
@@ -77,7 +79,13 @@ const USAGE = `usage: theseus.js <command> [args]
                                       write lean planner/builder/reviewer agents (role: planner, builder, reviewer)
   status [--json [--full]]
   check                               for a Stop hook: exit 2 while gates are open
-  archive                             move a finished run to .theseus/archive/<key>/`;
+  runs [--json]                       every run: active, paused and closed
+  switch KEY                          make another open run active (only between checkpoints)
+  complete [--approved-by NAME]       finish the run once every checkpoint is done; the human confirms
+  abandon --reason R [--approved-by NAME]
+                                      stop the run early; the human confirms
+  status --run KEY / diff --run KEY   read another run without switching
+  archive                             older name for complete`;
 
 class GateError extends Error {}
 
@@ -169,13 +177,21 @@ function pathsFor(root, base) {
   };
 }
 
+/** Repos listed by the active run and any paused open runs, or null when none is multi-repo. */
 function readRepos(base) {
-  try {
-    const run = JSON.parse(fs.readFileSync(path.join(base, 'current', 'run.json'), 'utf8'));
-    return Array.isArray(run.repos) ? run.repos : null;
-  } catch {
-    return null;
+  const dirs = [path.join(base, 'current')];
+  const parked = path.join(base, 'runs');
+  if (fs.existsSync(parked)) for (const key of fs.readdirSync(parked)) dirs.push(path.join(parked, key));
+  let repos = null;
+  for (const dir of dirs) {
+    try {
+      const run = JSON.parse(fs.readFileSync(path.join(dir, 'run.json'), 'utf8'));
+      if (Array.isArray(run.repos)) repos = (repos || []).concat(run.repos);
+    } catch {
+      // not a run
+    }
   }
+  return repos;
 }
 
 /**
@@ -383,7 +399,10 @@ function writeJson(file, value) {
 
 function loadRun(p) {
   if (!fs.existsSync(p.runFile)) {
-    fail('no active theseus run — start one with: theseus.js init --key K --reference R --test-cmd C');
+    const parked = path.join(p.base, 'runs');
+    const open = fs.existsSync(parked) ? fs.readdirSync(parked).sort() : [];
+    const resume = open.length ? `open runs: ${open.join(', ')} — resume one with theseus.js switch KEY, or ` : '';
+    fail(`no active theseus run — ${resume}start one with: theseus.js init --key K --reference R --test-cmd C`);
   }
   return { run: readJson(p.runFile), state: readJson(p.cpFile) };
 }
@@ -560,6 +579,200 @@ function assertCliMayApprove(run) {
   }
 }
 
+// ── runs: the active one in current/, paused ones in runs/, closed ones in archive/ ──
+
+const CLOSING = { completing: 'complete', abandoning: 'abandoned' };
+
+function runStatus(run) {
+  return run.status || 'open';
+}
+
+/** The same paths, pointed at another run's folder. */
+function withRunDir(p, dir) {
+  return {
+    ...p,
+    run: dir,
+    runFile: path.join(dir, 'run.json'),
+    cpFile: path.join(dir, 'checkpoints.json'),
+    logFile: path.join(dir, 'log.jsonl'),
+    evidence: path.join(dir, 'evidence'),
+  };
+}
+
+function readRunAt(dir) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(dir, 'run.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/** Every run in this `.theseus/`, active first, then paused, then closed. */
+function listRuns(p) {
+  const out = [];
+  const add = (dir, place) => {
+    const run = readRunAt(dir);
+    if (!run) return;
+    let checkpoints = [];
+    try {
+      checkpoints = JSON.parse(fs.readFileSync(path.join(dir, 'checkpoints.json'), 'utf8')).checkpoints;
+    } catch {
+      // a run with no plan yet
+    }
+    let lastActivity = run.created || null;
+    try {
+      lastActivity = fs.statSync(path.join(dir, 'log.jsonl')).mtime.toISOString();
+    } catch {
+      // no log yet
+    }
+    // Runs archived before completion was tracked were finished runs.
+    const status = place === 'archive' ? (['completed', 'abandoned'].includes(run.status) ? run.status : 'completed') : runStatus(run);
+    out.push({ key: run.key, status, active: place === 'current', place, done: checkpoints.filter(c => c.status === 'done').length, total: checkpoints.length, lastActivity, dir });
+  };
+  add(path.join(p.base, 'current'), 'current');
+  for (const place of ['runs', 'archive']) {
+    const dir = path.join(p.base, place);
+    if (fs.existsSync(dir)) for (const key of fs.readdirSync(dir).sort()) add(path.join(dir, key), place);
+  }
+  return out;
+}
+
+function findRun(p, key) {
+  const runs = listRuns(p);
+  const found = runs.find(r => r.key === key);
+  if (!found) fail(`unknown run '${key}' — known: ${runs.map(r => r.key).join(', ') || 'none'}`);
+  return found;
+}
+
+/** A checkpoint of the active run that is still being built or waiting on approval. */
+function inFlight(p) {
+  const current = withRunDir(p, path.join(p.base, 'current'));
+  if (!fs.existsSync(current.runFile)) return null;
+  const { run, state } = loadRun(current);
+  const cp = state.checkpoints.find(isActive);
+  return cp ? { run, cp } : null;
+}
+
+/** Move the active run aside to runs/<key>/ so another can take its place. */
+function parkActive(p) {
+  const current = path.join(p.base, 'current');
+  const run = readRunAt(current);
+  if (!run) return null;
+  const dest = path.join(p.base, 'runs', run.key);
+  if (fs.existsSync(dest)) fail(`runs/${run.key} already exists — cannot pause the active run`);
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.renameSync(current, dest);
+  return run.key;
+}
+
+function assertNotInFlight(p, doing) {
+  const flying = inFlight(p);
+  if (flying) {
+    fail(`${flying.cp.id} of run ${flying.run.key} is still '${flying.cp.status}' — finish it (or get it approved) before ${doing}; two runs cannot build in one working tree at once`);
+  }
+}
+
+/** Make a paused run the active one, pausing whatever is active now. */
+function switchRun(p, key, { source }) {
+  const target = findRun(p, key);
+  if (target.active) fail(`${key} is already the active run`);
+  if (target.place === 'archive') fail(`run ${key} is ${target.status} — closed runs can be viewed but not resumed`);
+  assertNotInFlight(p, 'switching runs');
+  const from = parkActive(p);
+  if (from) log(withRunDir(p, path.join(p.base, 'runs', from)), 'run-paused', { to: key, source });
+  const current = path.join(p.base, 'current');
+  fs.renameSync(target.dir, current);
+  log(withRunDir(p, current), 'run-resumed', { from, source });
+  return from;
+}
+
+/** Commands that change a run are refused while its closing waits on the human. */
+function assertOpen(run) {
+  const status = runStatus(run);
+  if (CLOSING[status]) {
+    fail(`run ${run.key} is waiting for the human to confirm it ${CLOSING[status]} — they confirm or keep it open in the viewer`);
+  }
+}
+
+/** What a closed run leaves behind: summary.json, built from its checkpoints and log. */
+function runSummary(p, run, state, final) {
+  const events = readLog(p);
+  const verdicts = gate => events.filter(e => e.event === 'gate' && e.gate === gate && e.reviewer);
+  const findings = list => list.reduce((n, e) => n + (parseInt(e.result, 10) || 0), 0);
+  const approvals = { viewer: 0, agent: 0, deferred: 0 };
+  for (const cp of state.checkpoints) {
+    if (!cp.approval) continue;
+    if (cp.approval.deferred) approvals.deferred += 1;
+    else if (cp.approval.source === 'viewer') approvals.viewer += 1;
+    else approvals.agent += 1;
+  }
+  const finished = new Date();
+  const started = run.created ? new Date(run.created) : null;
+  return {
+    key: run.key,
+    status: final,
+    reason: run.closeReason || null,
+    checkpoints: { done: state.checkpoints.filter(c => c.status === 'done').length, total: state.checkpoints.length },
+    approvals,
+    reviews: {
+      visual: { verdicts: verdicts('visual').length, findings: findings(verdicts('visual')) },
+      code: { verdicts: verdicts('review').length, findings: findings(verdicts('review')) },
+    },
+    withoutIsolation: events.filter(e => e.event === 'gate' && e.isolation === 'none').length,
+    learningsAdded: events.filter(e => e.event === 'learned').length,
+    started: run.created || null,
+    finished: finished.toISOString(),
+    durationMinutes: started ? Math.round((finished - started) / 60000) : null,
+  };
+}
+
+/**
+ * Ask to close the active run. `kind` is 'complete' (every checkpoint done)
+ * or 'abandon' (any time, with a reason). It waits on the human unless an
+ * approver is given, which only `approvals: any` allows.
+ */
+function requestClose(p, kind, { reason = null, source, by = null }) {
+  const { run, state } = loadRun(p);
+  assertOpen(run);
+  if (kind === 'complete' && (state.checkpoints.length === 0 || state.checkpoints.some(c => c.status !== 'done'))) {
+    fail('only a finished run can be completed — every checkpoint must be done; to stop early: theseus.js abandon --reason "…"');
+  }
+  if (kind === 'abandon' && !(typeof reason === 'string' && reason.trim())) fail('--reason is required — say why the run is being abandoned');
+  run.status = kind === 'complete' ? 'completing' : 'abandoning';
+  if (kind === 'abandon') run.closeReason = reason.trim();
+  save(p, run, state);
+  log(p, kind === 'complete' ? 'completion-requested' : 'abandon-requested', { source, reason: run.closeReason || null });
+  if (by) return closeRun(p, 'confirm', { source, by });
+  return { waiting: true, status: run.status };
+}
+
+/** The human's answer to a pending close: confirm it, or keep the run open. */
+function closeRun(p, decision, { source, by }) {
+  const { run, state } = loadRun(p);
+  const pending = runStatus(run);
+  if (!CLOSING[pending]) fail(`nothing to confirm — run ${run.key} has no completion or abandonment waiting`);
+  if (decision === 'keep') {
+    run.status = 'open';
+    delete run.closeReason;
+    save(p, run, state);
+    log(p, 'run-kept-open', { source, by });
+    return { kept: true };
+  }
+  if (decision !== 'confirm') fail(`decision must be confirm or keep, not '${decision}'`);
+  const final = pending === 'completing' ? 'completed' : 'abandoned';
+  const dest = path.join(p.archive, run.key);
+  if (fs.existsSync(dest)) fail(`archive/${run.key} already exists`);
+  run.status = final;
+  run.closed = { at: new Date().toISOString(), by, source };
+  const summary = runSummary(p, run, state, final);
+  save(p, run, state);
+  writeJson(path.join(p.run, 'summary.json'), summary);
+  log(p, final === 'completed' ? 'run-completed' : 'run-abandoned', { source, by, reason: run.closeReason || null });
+  fs.mkdirSync(p.archive, { recursive: true });
+  fs.renameSync(p.run, dest);
+  return { final, summary, dest };
+}
+
 // ── operations shared by the CLI and the viewer ──────────────────────────────
 
 function approvePlan(p, { by, source }) {
@@ -705,11 +918,52 @@ function readFeedback(p) {
   return readJson(p.feedback, { items: [] });
 }
 
+const BRIEF_LISTS = ['in_scope', 'out_of_scope', 'assumptions', 'questions'];
+
+/** Validate the agent's brief: what it understood, and what it will make checkpoints for. */
+function normalizeBrief(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) fail('the brief must be a JSON object');
+  const text = key => (typeof input[key] === 'string' && input[key].trim() ? input[key].trim() : null);
+  const list = key => (Array.isArray(input[key]) ? input[key].filter(x => typeof x === 'string' && x.trim()).map(x => x.trim()) : []);
+  const goal = text('goal');
+  if (!goal) fail("the brief has no 'goal' — say in a sentence or two what this run should achieve");
+  const understanding = text('understanding');
+  if (!understanding) fail("the brief has no 'understanding' — say in plain words what you believe is being asked");
+  const areas = list('areas');
+  if (areas.length === 0) fail("the brief has no 'areas' — list what you will create checkpoints for, so the human can check nothing is missing");
+  const brief = { goal, understanding, areas };
+  for (const key of BRIEF_LISTS) brief[key] = list(key);
+  return brief;
+}
+
+function approveBrief(p, { by, source }) {
+  const { run, state } = loadRun(p);
+  assertOpen(run);
+  if (!run.brief) fail('there is no brief to confirm yet — the agent writes it with: theseus.js brief --file F');
+  if (run.brief.status === 'confirmed') fail('the brief is already confirmed');
+  if (run.brief.status === 'draft') fail('the brief has changes requested — wait for the agent to revise it');
+  run.brief.status = 'confirmed';
+  run.brief.confirmedBy = { by, source };
+  save(p, run, state);
+  log(p, 'brief-approved', { by, source });
+}
+
 /** Human feedback from the viewer. On a checkpoint awaiting approval it means "request changes". */
-function addFeedback(p, { cp: cpId, text }) {
+function addFeedback(p, { cp: cpId, text, brief = false }) {
   if (typeof text !== 'string' || !text.trim()) fail('feedback needs some text');
   const { run, state } = loadRun(p);
   let reopened = false;
+  if (brief) {
+    if (!run.brief || run.brief.status !== 'pending') fail('there is no brief waiting for review');
+    run.brief.status = 'draft';
+    save(p, run, state);
+    const feedback = readFeedback(p);
+    const item = { id: feedback.items.length + 1, at: new Date().toISOString(), cp: null, brief: true, text: text.trim(), read: false };
+    feedback.items.push(item);
+    writeJson(p.feedback, feedback);
+    log(p, 'brief-changes-requested', { text: item.text });
+    return { item, reopened: false, brief: true };
+  }
   if (cpId) {
     const cp = findCheckpoint(state, cpId);
     if (cp.status === 'awaiting-approval') {
@@ -733,6 +987,17 @@ function readLearnings(p) {
 
 function nextAction(p, state, run) {
   const viewer = run && run.approvals === 'viewer';
+  if (run && ['completed', 'abandoned'].includes(runStatus(run))) return `run ${run.key} is ${runStatus(run)} — nothing left to do; it stays in History`;
+  if (run && CLOSING[runStatus(run)]) {
+    return `human confirms the run ${CLOSING[runStatus(run)]} in the viewer (or keeps it open); agent runs: theseus.js wait`;
+  }
+  if (run && run.briefRequired && state.checkpoints.length === 0) {
+    if (!run.brief) return 'write the brief (light recon only — no deep research yet): theseus.js brief --file F';
+    if (run.brief.status === 'draft') return 'revise the brief from the human\'s feedback (theseus.js inbox), then: theseus.js brief --file F';
+    if (run.brief.status === 'pending') {
+      return viewer ? 'human confirms the brief in the viewer; agent runs: theseus.js wait' : 'get the human to confirm the brief: theseus.js approve-brief --by NAME';
+    }
+  }
   if (state.checkpoints.length === 0) return 'plan the checkpoints: theseus.js plan --file F';
   const active = state.checkpoints.find(isActive);
   if (active) {
@@ -762,7 +1027,7 @@ function nextAction(p, state, run) {
     return viewer ? `human approves the plan (${ids}) in the viewer; agent runs: theseus.js wait` : `human approval of ${ids}: theseus.js approve-plan --by NAME`;
   }
   if (next) return `theseus.js begin ${next.id}`;
-  return 'every checkpoint is done: the human reviews the whole feature, then theseus.js archive';
+  return 'every checkpoint is done: the human reviews the whole feature, then theseus.js complete';
 }
 
 function screenshots(p, cpId) {
@@ -788,6 +1053,8 @@ function snapshot(p) {
     learnings: readLearnings(p),
     feedback: readFeedback(p).items,
     log: readLog(p).slice(-LOG_LIMIT),
+    runs: listRuns(p).map(({ dir, ...rest }) => rest),
+    summary: readJson(path.join(p.run, 'summary.json'), null),
     warnings: {
       isolationNone: checkpoints.filter(c => c.isolationNone).map(c => c.id),
       deferredApprovals: checkpoints.filter(c => c.approval && c.approval.deferred).map(c => c.id),
@@ -855,8 +1122,14 @@ function cmdInit(cwd, { flags }) {
   } catch (error) {
     if (!multi) throw error;
   }
-  if (existing && fs.existsSync(existing.runFile)) {
+  // A run further up owns this folder; a second .theseus/ inside it would be ambiguous.
+  if (existing && fs.existsSync(existing.runFile) && existing.base !== p.base) {
     fail(`a run is already active (key ${readJson(existing.runFile).key}) in ${existing.base} — resume it (theseus.js status) or finish and archive it first`);
+  }
+  const newKey = requireFlag(flags, 'key', 'a ticket id or a kebab-case slug');
+  if (fs.existsSync(p.base)) {
+    if (listRuns(p).some(x => x.key === newKey)) fail(`a run with key '${newKey}' already exists — pick another key, or resume it with: theseus.js switch ${newKey}`);
+    assertNotInFlight(p, 'starting another run');
   }
   const autonomy = stringFlag(flags, 'autonomy') || 'step';
   if (!AUTONOMY.test(autonomy)) fail(`--autonomy must be step, batch:N or unattended, not '${autonomy}'`);
@@ -869,7 +1142,7 @@ function cmdInit(cwd, { flags }) {
   const reviewers = stringFlag(flags, 'reviewers') || '2';
   if (!REVIEWER_COUNTS.includes(reviewers)) fail(`--reviewers must be 0, 1 or 2, not '${reviewers}'`);
   const run = {
-    key: requireFlag(flags, 'key', 'a ticket id or a kebab-case slug'),
+    key: newKey,
     reference: requireFlag(flags, 'reference', 'what defines correct: legacy code, a running app, a spec or a mock'),
     testCmd: requireFlag(flags, 'test-cmd', 'the command that runs the tests'),
     arch: stringFlag(flags, 'arch') ? flags.arch.split(',').map(s => s.trim()).filter(Boolean) : [],
@@ -882,8 +1155,11 @@ function cmdInit(cwd, { flags }) {
     settingsVersion: 0,
     settingsAcked: 0,
     ...(repos ? { repos } : {}),
+    briefRequired: true,
     created: new Date().toISOString(),
   };
+  const paused = fs.existsSync(p.base) ? parkActive(p) : null;
+  if (paused) log(withRunDir(p, path.join(p.base, 'runs', paused)), 'run-paused', { to: run.key, source: 'cli' });
   fs.mkdirSync(p.base, { recursive: true });
   const ignore = path.join(p.base, '.gitignore');
   if (!fs.existsSync(ignore)) fs.writeFileSync(ignore, 'server.json\nserver.log\n*.tmp\n');
@@ -891,11 +1167,36 @@ function cmdInit(cwd, { flags }) {
   log(p, 'init', { key: run.key, autonomy, approvals, granularity });
   console.log(`theseus: run '${run.key}' started in ${path.relative(cwd, p.base) || p.base} (autonomy: ${autonomy}, approvals: ${approvals}, checkpoint size: ${granularity})`);
   if (repos) console.log(`theseus: repos in this run: ${repos.map(x => `${x.name} (${x.path})`).join(', ')} — every gate covers all of them`);
+  if (paused) console.log(`theseus: run '${paused}' is paused; resume it later with: theseus.js switch ${paused}`);
   console.log('theseus: start the viewer and give the human its link: theseus.js serve');
+  console.log('theseus: next, light recon only, then write the brief for the human to confirm: theseus.js brief --file F');
+}
+
+function cmdBrief(p, { flags }) {
+  const { run, state } = loadRun(p);
+  assertOpen(run);
+  if (state.checkpoints.length) fail('the checkpoints are already planned — change direction through feedback and theseus.js add, not a new brief');
+  const brief = normalizeBrief(readJson(requireFlag(flags, 'file')));
+  run.brief = { ...brief, status: 'pending', submitted: new Date().toISOString() };
+  save(p, run, state);
+  log(p, 'brief-submitted', { areas: brief.areas.length });
+  console.log(`theseus: brief saved (${brief.areas.length} area(s)) — the human confirms it or asks for changes in the viewer. No deep research or planning until then.`);
+}
+
+function cmdApproveBrief(p, { flags }) {
+  const { run } = loadRun(p);
+  assertCliMayApprove(run);
+  const by = requireFlag(flags, 'by', 'the human who confirmed the brief');
+  approveBrief(p, { by, source: 'cli' });
+  console.log(`theseus: brief confirmed by ${by} (reported by agent)`);
 }
 
 function cmdPlan(p, { flags }) {
   const { run, state } = loadRun(p);
+  assertOpen(run);
+  if (run.briefRequired && (!run.brief || run.brief.status !== 'confirmed')) {
+    fail('confirm the brief first — the agent writes it with theseus.js brief --file F, and the human confirms it in the viewer');
+  }
   if (state.checkpoints.some(c => c.status !== 'pending')) {
     fail('checkpoints are already in progress — append new ones with: theseus.js add --file F');
   }
@@ -907,6 +1208,7 @@ function cmdPlan(p, { flags }) {
 
 function cmdAdd(p, { flags }) {
   const { run, state } = loadRun(p);
+  assertOpen(run);
   const added = normalizeCheckpoints(readJson(requireFlag(flags, 'file')), state.checkpoints.length, 'feedback', repoNames(run));
   state.checkpoints.push(...added);
   save(p, run, state);
@@ -924,6 +1226,7 @@ function cmdApprovePlan(p, { flags }) {
 
 function cmdBegin(p, { positionals }) {
   const { run, state } = loadRun(p);
+  assertOpen(run);
   const cp = findCheckpoint(state, positionals[0]);
   if (cp.status !== 'pending') fail(`${cp.id} is already '${cp.status}'`);
   if (!cp.approved) fail(`${cp.id} has not been approved by a human — they approve the plan in the viewer (or, with --approvals any: theseus.js approve-plan --by NAME)`);
@@ -1052,6 +1355,7 @@ function recordPanel(p, cp, gate, flags, fp, states) {
 
 function cmdRecord(p, { positionals, flags }) {
   const { run, state } = loadRun(p);
+  assertOpen(run);
   const cp = findCheckpoint(state, positionals[0]);
   const gate = positionals[1];
   if (!['red', 'tests', 'visual', 'review'].includes(gate)) {
@@ -1079,6 +1383,7 @@ function cmdRecord(p, { positionals, flags }) {
 
 function cmdAdvance(p, { positionals, flags }) {
   const { run } = loadRun(p);
+  assertOpen(run);
   const by = stringFlag(flags, 'approved-by');
   if (by) assertCliMayApprove(run);
   const result = advance(p, positionals[0], { by, source: 'cli' });
@@ -1162,23 +1467,38 @@ function cmdInbox(p) {
  * than talking to the server, so it works even if the server restarted.
  */
 async function cmdWait(p, { flags }) {
-  loadRun(p);
+  const { key } = loadRun(p).run;
   const timeout = Number(stringFlag(flags, 'timeout') || 540);
   if (!Number.isFinite(timeout) || timeout <= 0) fail('--timeout must be a positive number of seconds');
   const seen = readLog(p).length;
   const deadline = Date.now() + timeout * 1000;
-  const human = new Set(['plan-approved', 'approved', 'feedback', 'changes-requested', 'settings-changed']);
+  const human = new Set(['plan-approved', 'approved', 'feedback', 'changes-requested', 'settings-changed', 'brief-approved', 'brief-changes-requested', 'run-kept-open']);
   while (Date.now() < deadline) {
+    // The human completed, abandoned or switched away from this run in the viewer.
+    if (!fs.existsSync(p.runFile) || readJson(p.runFile).key !== key) {
+      const now = listRuns(p).find(x => x.key === key);
+      const state = !now ? 'gone' : now.place === 'archive' ? now.status : 'paused';
+      console.log(`theseus: run ${key} is now ${state}${now && now.place === 'archive' ? ' — its summary is saved; stop the viewer if nothing else is running' : ''}`);
+      return;
+    }
     const fresh = readLog(p).slice(seen).filter(e => human.has(e.event) && e.source !== 'cli');
     if (fresh.length) {
       for (const e of fresh) {
         if (e.event === 'settings-changed') continue; // announced by announceSettings below
-        const what = { 'plan-approved': `plan approved (${(e.cps || []).join(', ')})`, approved: `${e.cp} approved`, feedback: `feedback${e.cp ? ` on ${e.cp}` : ''}: ${e.text}`, 'changes-requested': `changes requested on ${e.cp}: ${e.text}` }[e.event];
+        const what = {
+          'plan-approved': `plan approved (${(e.cps || []).join(', ')})`,
+          approved: `${e.cp} approved`,
+          feedback: `feedback${e.cp ? ` on ${e.cp}` : ''}: ${e.text}`,
+          'changes-requested': `changes requested on ${e.cp}: ${e.text}`,
+          'brief-approved': 'brief confirmed — now do the research and plan the checkpoints',
+          'brief-changes-requested': `changes requested on the brief: ${e.text}`,
+          'run-kept-open': 'the human kept the run open',
+        }[e.event];
         console.log(`theseus: ${what}`);
       }
       announceSettings(p);
       if (fresh.some(e => e.event === 'approved')) console.log('theseus: commit the approved checkpoint, then continue.');
-      if (fresh.some(e => e.event === 'feedback' || e.event === 'changes-requested')) console.log('theseus: read it with: theseus.js inbox');
+      if (fresh.some(e => ['feedback', 'changes-requested', 'brief-changes-requested'].includes(e.event))) console.log('theseus: read it with: theseus.js inbox');
       return;
     }
     await new Promise(resolve => setTimeout(resolve, 500));
@@ -1275,16 +1595,60 @@ function cmdCheck(cwd) {
   }
 }
 
+function closeMessage(result, key) {
+  if (result.waiting) {
+    const what = result.status === 'completing' ? 'complete' : 'abandoned';
+    return `theseus: run ${key} is waiting for the human to confirm it ${what} in the viewer — then: theseus.js wait`;
+  }
+  const sm = result.summary;
+  return `theseus: run ${key} ${result.final} — ${sm.checkpoints.done}/${sm.checkpoints.total} checkpoints, summary in ${path.relative(process.cwd(), path.join(result.dest, 'summary.json')) || 'summary.json'}. Learnings stay for the next run.`;
+}
+
+function cmdComplete(p, { flags }) {
+  const { run } = loadRun(p);
+  const by = stringFlag(flags, 'approved-by');
+  if (by) assertCliMayApprove(run);
+  console.log(closeMessage(requestClose(p, 'complete', { source: 'cli', by }), run.key));
+}
+
+function cmdAbandon(p, { flags }) {
+  const { run } = loadRun(p);
+  const by = stringFlag(flags, 'approved-by');
+  if (by) assertCliMayApprove(run);
+  console.log(closeMessage(requestClose(p, 'abandon', { reason: stringFlag(flags, 'reason'), source: 'cli', by }), run.key));
+}
+
+/** The old way to finish a run. It now asks for completion, which the human confirms. */
 function cmdArchive(p) {
   const { run, state } = loadRun(p);
   if (state.checkpoints.length === 0 || state.checkpoints.some(c => c.status !== 'done')) {
     fail('only a finished run can be archived — every checkpoint must be done');
   }
-  const dest = path.join(p.archive, run.key);
-  if (fs.existsSync(dest)) fail(`archive/${run.key} already exists`);
-  fs.mkdirSync(p.archive, { recursive: true });
-  fs.renameSync(p.run, dest);
-  console.log(`theseus: run archived to ${path.relative(p.root, dest)}; learnings stay for the next run. Stop the viewer with: theseus.js stop`);
+  const by = run.approvals === 'any' ? 'agent (archive)' : null;
+  console.log(closeMessage(requestClose(p, 'complete', { source: 'cli', by }), run.key));
+}
+
+function cmdSwitch(p, { positionals }) {
+  const key = positionals[0];
+  if (!key) fail('give the run to switch to, e.g. theseus.js switch HR-8 (see theseus.js runs)');
+  const from = switchRun(p, key, { source: 'cli' });
+  console.log(`theseus: run ${key} is now active${from ? `; ${from} is paused` : ''}`);
+}
+
+function cmdRuns(p, { flags }) {
+  const runs = listRuns(p).map(({ dir, ...rest }) => rest);
+  if (flags.json) {
+    console.log(JSON.stringify(runs));
+    return;
+  }
+  if (runs.length === 0) {
+    console.log('theseus: no runs yet — start one with: theseus.js init --key K --reference R --test-cmd C');
+    return;
+  }
+  for (const r of runs) {
+    const label = r.active ? 'active' : r.place === 'runs' ? 'paused' : r.status;
+    console.log(`  ${r.active ? '*' : ' '} ${r.key.padEnd(16)} ${label.padEnd(10)} ${String(r.done).padStart(2)}/${r.total} checkpoints  last activity ${r.lastActivity ? r.lastActivity.slice(0, 16).replace('T', ' ') : '—'}`);
+  }
 }
 
 // ── the viewer server, run in the background ─────────────────────────────────
@@ -1491,6 +1855,12 @@ const COMMANDS = {
   advance: cmdAdvance,
   diff: cmdDiff,
   config: cmdConfig,
+  brief: cmdBrief,
+  'approve-brief': cmdApproveBrief,
+  complete: cmdComplete,
+  abandon: cmdAbandon,
+  switch: cmdSwitch,
+  runs: cmdRuns,
   wait: cmdWait,
   inbox: cmdInbox,
   learn: cmdLearn,
@@ -1521,12 +1891,17 @@ async function main(argv) {
       // The background server is told exactly where its state is, so it never
       // depends on where it happened to be spawned.
       const foreground = process.env.THESEUS_STATE && args.flags.foreground;
-      const p = foreground ? foregroundPaths(process.env.THESEUS_STATE) : resolvePaths(process.cwd());
+      let p = foreground ? foregroundPaths(process.env.THESEUS_STATE) : resolvePaths(process.cwd());
+      // --run KEY reads another run (paused or closed) without switching to it.
+      if (typeof args.flags.run === 'string') {
+        if (!['status', 'diff'].includes(command)) fail('--run only works with status and diff — use theseus.js switch KEY to work on another run');
+        p = withRunDir(p, findRun(p, args.flags.run).dir);
+      }
       // Output that is handed to subagents verbatim stays free of notices.
       const pure = command === 'diff' || command === 'learnings' || (command === 'status' && args.flags.json);
       if (!foreground && !pure && command !== 'wait') announceSettings(p);
       await COMMANDS[command](p, args);
-      if (!pure && !['status', 'stop', 'serve'].includes(command) && fs.existsSync(p.runFile)) printNext(p);
+      if (!pure && !['status', 'stop', 'serve', 'runs'].includes(command) && fs.existsSync(p.runFile)) printNext(p);
     }
     return 0;
   } catch (error) {
@@ -1564,6 +1939,13 @@ module.exports = {
   advance,
   addFeedback,
   doneMessage,
+  approveBrief,
+  listRuns,
+  findRun,
+  withRunDir,
+  switchRun,
+  requestClose,
+  closeRun,
   IMAGE_TYPES,
 };
 

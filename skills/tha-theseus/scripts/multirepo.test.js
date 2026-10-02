@@ -42,6 +42,15 @@ function ok(dir, ...args) {
   return r;
 }
 
+/** Every run started by this version needs a confirmed brief before it can plan. */
+function confirmBrief(dir) {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'theseus-brief-')), 'brief.json');
+  fs.writeFileSync(file, JSON.stringify({ goal: 'g', understanding: 'u', areas: ['a'] }));
+  ok(dir, 'brief', '--file', file);
+  const core = require('./theseus');
+  core.approveBrief(core.resolvePaths(dir), { by: 'human (viewer)', source: 'viewer' });
+}
+
 function refused(dir, pattern, ...args) {
   const r = theseus(dir, ...args);
   assert.strictEqual(r.code, 1, `expected theseus ${args.join(' ')} to fail, got ${r.code}: ${r.out}`);
@@ -80,6 +89,7 @@ function workspace({ begin = true } = {}) {
   makeRepo(path.join(dir, 'api'), 'api.done');
   makeRepo(path.join(dir, 'web'), 'web.done');
   ok(dir, 'init', '--key', 'WS-1', '--reference', 'spec.md', '--repos', 'api,web', '--test-cmd', 'node check.js', '--approvals', 'any');
+  confirmBrief(dir);
   ok(dir, 'plan', '--file', writeJson(path.dirname(dir), `plan-${path.basename(dir)}.json`, PLAN));
   ok(dir, 'approve-plan', '--by', 'h');
   if (begin) ok(dir, 'begin', 'CP1');
@@ -234,6 +244,7 @@ test('a dirty submodule no longer crashes, and changing it makes gates stale', (
   git(app, 'submodule', 'add', '-q', path.join(root, 'lib'), 'lib');
   git(app, 'commit', '-q', '-m', 'add submodule');
   ok(app, 'init', '--key', 'S', '--reference', 'r', '--test-cmd', 'node check.js', '--approvals', 'any');
+  confirmBrief(app);
   ok(app, 'plan', '--file', writeJson(root, 'plan.json', [{ title: 't', done: 'd', ui: false, tests: ['x'] }]));
   ok(app, 'approve-plan', '--by', 'h');
   ok(app, 'begin', 'CP1');
