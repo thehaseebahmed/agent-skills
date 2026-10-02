@@ -54,15 +54,17 @@
   .dot.on { background: var(--pass); box-shadow: 0 0 0 3px var(--pass-bg); }
   .dot.off { background: var(--fail); }
   .next { width: 100%; color: var(--muted); font-size: 13px; }
-  .btn.small { padding: 3px 10px; font-size: 12px; font-weight: 600; }
-  .settings { width: 100%; padding: 12px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--border); }
-  .settings[hidden] { display: none; }
-  .settings .fields { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: flex-end; }
-  .settings label[hidden] { display: none; }
-  .settings label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); font-weight: 600; }
-  .settings select, .settings input { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; }
-  .settings input[type=number] { width: 72px; }
-  .settings .hint { margin: 10px 0 0; font-size: 12px; color: var(--muted); }
+  .setting { position: relative; display: inline-block; }
+  .chip.toggle { cursor: pointer; font: inherit; font-size: 12px; }
+  .chip.toggle::after { content: " ▾"; color: var(--faint); }
+  .chip.toggle:hover, .chip.toggle[aria-expanded="true"] { border-color: var(--accent); color: var(--text); }
+  .chip.toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .menu { position: absolute; top: calc(100% + 4px); left: 0; z-index: 20; min-width: 230px; max-width: calc(100vw - 32px); padding: 4px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 20px rgba(16, 24, 40, .14); }
+  .menu button { display: flex; gap: 8px; width: 100%; text-align: left; padding: 7px 10px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; font-size: 13px; }
+  .menu button:hover, .menu button:focus-visible { background: var(--panel-2); outline: none; }
+  .menu button .tick { flex: none; width: 1em; color: var(--accent); }
+  .menu button small { display: block; color: var(--muted); font-size: 12px; }
+  .menu button:disabled { opacity: .55; cursor: default; }
   .next b { color: var(--text); font-weight: 600; }
   .reference { width: 100%; font-size: 12px; color: var(--faint); overflow-wrap: anywhere; }
 
@@ -153,34 +155,7 @@
   <header class="top">
     <div class="brand">Theseus<small id="key">connecting…</small></div>
     <div class="chips" id="chips"></div>
-    <button class="btn small" id="settings-toggle" aria-expanded="false" aria-controls="settings">Settings</button>
     <div class="live"><span class="dot" id="dot"></span><span id="live">connecting</span></div>
-    <div class="settings" id="settings" hidden>
-      <div class="fields">
-        <label>Autonomy
-          <select id="set-mode">
-            <option value="step">step: approve every checkpoint</option>
-            <option value="batch">batch: one approval covers N</option>
-            <option value="unattended">unattended: approve in the PR</option>
-          </select>
-        </label>
-        <label id="set-n-label">N <input type="number" id="set-n" min="1" value="3"></label>
-        <label>Approvals
-          <select id="set-approvals">
-            <option value="viewer">viewer only</option>
-            <option value="any">viewer or agent (chat)</option>
-          </select>
-        </label>
-        <label>Checkpoint size
-          <select id="set-gran">
-            <option value="s-m">S–M: fewer, larger (cheaper)</option>
-            <option value="xs-s">XS–S: many, tiny</option>
-          </select>
-        </label>
-        <button class="btn primary" id="settings-save">Save</button>
-      </div>
-      <p class="hint">Takes effect on the agent's next step. Checkpoint size applies to checkpoints planned from now on.</p>
-    </div>
     <div class="next" id="next"></div>
     <div class="reference" id="reference"></div>
   </header>
@@ -227,6 +202,27 @@
   let selected = decodeURIComponent(location.hash.slice(1)) || null;
   const drafts = {};
   const open = {};
+
+  const SETTINGS = {
+    autonomy: {
+      label: 'approve',
+      options: [
+        { value: 'step', short: 'every checkpoint', text: 'Every checkpoint', hint: 'You approve each one in here.' },
+        { value: 'batch:2', short: 'every 2 checkpoints', text: 'Every 2 checkpoints', hint: 'One approval covers the next two.' },
+        { value: 'batch:3', short: 'every 3 checkpoints', text: 'Every 3 checkpoints', hint: 'One approval covers the next three.' },
+        { value: 'batch:5', short: 'every 5 checkpoints', text: 'Every 5 checkpoints', hint: 'One approval covers the next five.' },
+        { value: 'unattended', short: 'in the PR', text: 'Only in the PR', hint: 'The agent stops asking; you review the pull request.' },
+      ],
+    },
+    approvals: {
+      label: 'approvals from',
+      options: [
+        { value: 'viewer', short: 'viewer only', text: 'This viewer only', hint: 'Only your clicks here count as approval.' },
+        { value: 'any', short: 'viewer or agent', text: 'Viewer or agent', hint: 'The agent may also record an approval you give in chat.' },
+      ],
+    },
+  };
+  let openMenu = null;
 
   const GATES = [['red', 'Red'], ['tests', 'Tests'], ['visual', 'Visual'], ['review', 'Review']];
   const LABEL = { pass: 'pass', skip: 'skipped', carried: 'carried', stale: 'stale', fail: 'failed', findings: 'findings', partial: 'partial', none: '—' };
@@ -297,12 +293,18 @@
   function renderHeader() {
     const r = data.run;
     $('key').textContent = r.key;
-    $('chips').innerHTML = [
-      `autonomy: ${r.autonomy}`,
-      `approvals: ${r.approvals === 'viewer' ? 'viewer only' : 'viewer or agent'}`,
-      `checkpoint size: ${(r.granularity || 's-m').toUpperCase().replace('-', '–')}`,
-      `${data.checkpoints.filter(c => c.status === 'done').length}/${data.checkpoints.length} done`,
-    ].map(c => `<span class="chip">${esc(c)}</span>`).join('');
+    // Each setting is a chip. Clicking it lists the choices; picking one saves it at once.
+    $('chips').innerHTML = Object.entries(SETTINGS).map(([key, def]) => {
+      const current = r[key];
+      const opened = openMenu === key;
+      const choice = def.options.find(o => o.value === current);
+      const label = `${def.label}: ${choice ? choice.short : current}`;
+      const menu = opened ? `<div class="menu" role="menu">${def.options.map(o => `
+        <button role="menuitemradio" aria-checked="${o.value === current}" data-setting="${key}" data-to="${esc(o.value)}"${o.value === current ? ' disabled' : ''}>
+          <span class="tick">${o.value === current ? '✓' : ''}</span><span>${esc(o.text)}<small>${esc(o.hint)}</small></span>
+        </button>`).join('')}</div>` : '';
+      return `<span class="setting"><button class="chip toggle" data-menu="${key}" aria-haspopup="menu" aria-expanded="${opened}">${esc(label)}</button>${menu}</span>`;
+    }).join('') + `<span class="chip">${data.checkpoints.filter(c => c.status === 'done').length}/${data.checkpoints.length} done</span>`;
     $('next').innerHTML = `<b>Next:</b> ${esc(data.next)}`;
     $('reference').textContent = `Reference: ${r.reference}${r.arch.length ? ` · Standards: ${r.arch.join(', ')}` : ''}`;
   }
@@ -461,8 +463,19 @@
 
   document.addEventListener('click', async e => {
     const el = e.target.closest('button');
+    if (openMenu && !(el && (el.dataset.menu || el.dataset.setting))) {
+      openMenu = null;
+      renderHeader();
+    }
     if (!el) return;
-    if (el.dataset.select) {
+    if (el.dataset.menu) {
+      openMenu = openMenu === el.dataset.menu ? null : el.dataset.menu;
+      renderHeader();
+      if (openMenu) {
+        const first = document.querySelector('.menu button:not([disabled])');
+        if (first) first.focus();
+      }
+    } else if (el.dataset.select) {
       selected = el.dataset.select;
       history.replaceState(null, '', `${location.search}#${encodeURIComponent(selected)}`);
       render();
@@ -475,24 +488,10 @@
       const text = (drafts[`changes-${id}`] || '').trim();
       if (!text) return toast('Say what should change first.', true);
       if (await act(el, () => post('/api/feedback', { cp: id, text }))) drafts[`changes-${id}`] = '';
-    } else if (el.id === 'settings-toggle') {
-      const panel = $('settings');
-      panel.hidden = !panel.hidden;
-      el.setAttribute('aria-expanded', String(!panel.hidden));
-      if (!panel.hidden) fillSettings();
-    } else if (el.id === 'settings-save') {
-      const mode = $('set-mode').value;
-      const n = Number($('set-n').value);
-      if (mode === 'batch' && !(Number.isInteger(n) && n >= 1)) return toast('N must be a whole number of at least 1.', true);
-      const body = {
-        autonomy: mode === 'batch' ? `batch:${n}` : mode,
-        approvals: $('set-approvals').value,
-        granularity: $('set-gran').value,
-      };
-      if (await act(el, () => post('/api/settings', body))) {
-        $('settings').hidden = true;
-        $('settings-toggle').setAttribute('aria-expanded', 'false');
-      }
+    } else if (el.dataset.setting) {
+      openMenu = null;
+      await act(el, () => post('/api/settings', { [el.dataset.setting]: el.dataset.to }));
+      renderHeader();
     } else if (el.id === 'send-general') {
       const box = $('general-feedback');
       const text = box.value.trim();
@@ -502,20 +501,15 @@
     return undefined;
   });
 
-  function syncN() {
-    $('set-n-label').hidden = $('set-mode').value !== 'batch';
-  }
-
-  function fillSettings() {
-    if (!data || !data.run) return;
-    const a = data.run.autonomy;
-    $('set-mode').value = a.startsWith('batch:') ? 'batch' : a;
-    $('set-n').value = a.startsWith('batch:') ? a.slice(6) : 3;
-    $('set-approvals').value = data.run.approvals;
-    $('set-gran').value = data.run.granularity || 's-m';
-    syncN();
-  }
-  document.addEventListener('change', e => { if (e.target.id === 'set-mode') syncN(); });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && openMenu) {
+      const key = openMenu;
+      openMenu = null;
+      renderHeader();
+      const chip = document.querySelector(`[data-menu="${key}"]`);
+      if (chip) chip.focus();
+    }
+  });
 
   function setLive(on) {
     $('dot').className = `dot ${on ? 'on' : 'off'}`;

@@ -144,12 +144,9 @@ Settle these with the human before anything else:
    | `viewer` (default) | only the human, by clicking in the viewer. CLI approvals are refused |
    | `any` | also the CLI. Use this only when the human cannot open a link to this machine (a cloud agent). Those approvals are shown as "reported by agent" |
 
-6. **Checkpoint size:**
-
-   | Setting | Means |
-   |---|---|
-   | `s-m` (default) | fewer, larger checkpoints, each a small vertical slice. Fewer subagent start-ups |
-   | `xs-s` | Helix-sized: many tiny checkpoints. Catches a wrong turn sooner, costs more |
+6. **Checkpoint size** (CLI only, rarely changed): `--granularity s-m`, the default,
+   gives fewer, larger checkpoints, each a small vertical slice. `xs-s` gives
+   Helix-sized tiny ones, which cost more subagent start-ups.
 
 7. **Agents:** run `theseus agents` once per repo, unless the files exist already. It
    writes lean `theseus-planner`, `theseus-builder` and `theseus-reviewer` agents for
@@ -169,9 +166,12 @@ Settle these with the human before anything else:
      the session's model when the subagent's model costs more (github/copilot-cli#2758).
      Start the session on at least the planner's model.
 
-**All of these except the reference can change mid-run.** The human changes them in
-the viewer's Settings panel, or asks you, and you run
-`theseus config --autonomy … --approvals … --granularity …`.
+**Autonomy and approvals can change mid-run.**
+
+- In the viewer, each one is a chip in the header. Clicking it lists the choices in
+  plain words ("approve every 3 checkpoints"); picking one saves it.
+- Or the human asks you, and you run `theseus config --autonomy … --approvals …`.
+  Checkpoint size changes only this way: `--granularity`.
 
 - Under `approvals: viewer`, the CLI may only make autonomy or approvals *stricter*.
   Loosening happens in the viewer.
