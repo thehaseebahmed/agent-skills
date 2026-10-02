@@ -46,6 +46,8 @@ const USAGE = `usage: theseus.js <command> [args]
 
   init --key K --reference R --test-cmd C [--arch a.md,b.md]
        [--autonomy step|batch:N|unattended] [--approvals viewer|any] [--granularity xs-s|s-m]
+  init … --repos api,web[,name=path] [--test-cmd-<name> C]
+                                      one run across several repos (from the folder holding them)
   config [--autonomy …] [--approvals …] [--granularity …]
                                       change settings mid-run (the CLI may only tighten under --approvals viewer)
   serve [--port ${DEFAULT_PORT}]            start the live viewer in the background; prints its link
@@ -125,14 +127,27 @@ function git(root, args, env) {
   return result.stdout;
 }
 
-function gitRoot(cwd) {
-  const top = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' });
-  if (top.status !== 0) {
-    fail('not inside a git repository — theseus fingerprints the working tree with git');
-  }
-  return fs.realpathSync(top.stdout.trim());
+/** The git top level containing `dir`, or null when it is not inside a repo. */
+function gitTop(dir) {
+  const top = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd: dir, encoding: 'utf8' });
+  return top.status === 0 ? fs.realpathSync(top.stdout.trim()) : null;
 }
 
+function gitRoot(cwd) {
+  const top = gitTop(cwd);
+  if (!top) fail('not inside a git repository — theseus fingerprints the working tree with git');
+  return top;
+}
+
+function isWithin(child, parent) {
+  const rel = path.relative(parent, child);
+  return !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+/**
+ * `root` is the git repo for a single-repo run, or the run's own folder for a
+ * multi-repo run (whose repos are listed in run.json and resolved by repoList).
+ */
 function pathsFor(root, base) {
   const run = path.join(base, 'current');
   return {
@@ -151,27 +166,77 @@ function pathsFor(root, base) {
   };
 }
 
+function readRepos(base) {
+  try {
+    const run = JSON.parse(fs.readFileSync(path.join(base, 'current', 'run.json'), 'utf8'));
+    return Array.isArray(run.repos) ? run.repos : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Find `.theseus/` by walking up from cwd to the git root, so a command run
- * from a subfolder still finds the run. `init` instead creates it in cwd.
+ * Find `.theseus/` by walking up from cwd, so a command run from a subfolder
+ * still finds the run. Inside a git repo this finds exactly what it always
+ * did. Above the git root it only accepts a multi-repo run that lists the repo
+ * cwd is in (or cwd is the run's own folder), so an unrelated `.theseus/`
+ * further up is never picked up. `init` instead creates it in cwd.
  */
 function resolvePaths(cwd, { create = false } = {}) {
-  const root = gitRoot(cwd);
   const start = fs.realpathSync(cwd);
-  if (create) return pathsFor(root, path.join(start, STATE_DIR));
+  const top = gitTop(start);
+  if (create) return pathsFor(top || start, path.join(start, STATE_DIR));
   let dir = start;
   for (;;) {
     const candidate = path.join(dir, STATE_DIR);
-    if (fs.existsSync(candidate)) return pathsFor(root, candidate);
-    if (dir === root || path.dirname(dir) === dir) break;
+    if (fs.existsSync(candidate)) {
+      const repos = readRepos(candidate);
+      if (repos) {
+        const owns = dir === start || repos.some(r => isWithin(start, path.resolve(dir, r.path)));
+        if (owns) return pathsFor(dir, candidate);
+      } else if (top && isWithin(dir, top)) {
+        return pathsFor(top, candidate);
+      }
+    }
+    if (path.dirname(dir) === dir) break;
     dir = path.dirname(dir);
   }
-  return pathsFor(root, path.join(start, STATE_DIR));
+  if (!top) fail('not inside a git repository — theseus fingerprints the working tree with git');
+  return pathsFor(top, path.join(start, STATE_DIR));
 }
 
-/** Pathspec covering the repo minus our own state, so recording never dirties the fingerprint. */
-function pathspec(p) {
-  const rel = path.relative(p.root, p.base);
+/**
+ * The repos a run covers: [{ name, root, testCmd }]. A run without `repos`
+ * (every run made before multi-repo support) is the single repo at p.root.
+ */
+function repoList(p, run) {
+  if (!Array.isArray(run.repos)) return [{ name: path.basename(p.root), root: p.root, testCmd: run.testCmd, single: true }];
+  const dir = path.dirname(p.base);
+  return run.repos.map(r => ({ name: r.name, root: path.resolve(dir, r.path), testCmd: r.testCmd || run.testCmd }));
+}
+
+function isMulti(run) {
+  return Array.isArray(run.repos);
+}
+
+function repoNames(run) {
+  return isMulti(run) ? run.repos.map(r => r.name) : null;
+}
+
+/** The repos a checkpoint's test command runs in: its own `repos`, or the single repo. */
+function checkpointRepos(p, run, cp) {
+  const all = repoList(p, run);
+  return isMulti(run) ? all.filter(repo => (cp.repos || []).includes(repo.name)) : all;
+}
+
+/** A checkpoint's base commit in one repo. Single-repo runs store it as a plain string. */
+function baseOf(cp, repo) {
+  return typeof cp.base === 'string' ? cp.base : cp.base[repo.name];
+}
+
+/** Pathspec covering a repo minus our own state, so recording never dirties the fingerprint. */
+function pathspec(p, root = p.root) {
+  const rel = path.relative(root, p.base);
   if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return ['.'];
   return ['.', `:(exclude)${rel.split(path.sep).join('/')}`];
 }
@@ -182,13 +247,13 @@ function headOrEmptyTree(root) {
 }
 
 /**
- * Hash of every change since the checkpoint began — tracked and untracked,
- * committed or not. Diffing against the checkpoint's base rather than HEAD
- * means committing mid-checkpoint does not make passed gates look stale.
+ * Hash of every change in one repo since the checkpoint began — tracked and
+ * untracked, committed or not. Diffing against the checkpoint's base rather
+ * than HEAD means committing mid-checkpoint does not make passed gates stale.
  */
-function fingerprint(p, baseRef) {
-  const spec = pathspec(p);
-  const list = args => git(p.root, args).toString('utf8').split('\0').filter(Boolean);
+function repoFingerprint(p, root, baseRef) {
+  const spec = pathspec(p, root);
+  const list = args => git(root, args).toString('utf8').split('\0').filter(Boolean);
   // Hash (path, current content) for every path that differs from the base.
   // Hashing content rather than diff text keeps the result identical whether a
   // file is untracked, staged, or committed.
@@ -196,19 +261,72 @@ function fingerprint(p, baseRef) {
     ...list(['diff', '--name-only', '-z', baseRef, '--', ...spec]),
     ...list(['ls-files', '--others', '--exclude-standard', '-z', '--', ...spec]),
   ]);
+  // `git diff` leaves out a submodule whose only changes are untracked files,
+  // so add any dirty submodule explicitly. Clean ones stay out, which keeps
+  // the hash identical to earlier versions for every repo they handled.
+  if (fs.existsSync(path.join(root, '.gitmodules'))) {
+    for (const entry of list(['ls-files', '-s', '-z', '--', ...spec])) {
+      if (!entry.startsWith('160000 ')) continue;
+      const sub = entry.slice(entry.indexOf('\t') + 1);
+      if (changed.has(sub) || !fs.existsSync(path.join(root, sub, '.git'))) continue;
+      const dirty = spawnSync('git', ['status', '--porcelain'], { cwd: path.join(root, sub), encoding: 'utf8' }).stdout;
+      if (dirty && dirty.trim()) changed.add(sub);
+    }
+  }
   const hash = crypto.createHash('sha256');
   for (const file of [...changed].sort()) {
-    const full = path.join(p.root, file);
+    const full = path.join(root, file);
     hash.update(`\0${file}\0`);
     if (isSymlink(full)) {
       hash.update(`\0link:${fs.readlinkSync(full)}`);
     } else if (!fs.existsSync(full)) {
       hash.update('\0deleted');
+    } else if (fs.statSync(full).isDirectory()) {
+      // A submodule: hash its commit and its own uncommitted changes.
+      hash.update('\0submodule');
+      const sub = args => spawnSync('git', args, { cwd: full, encoding: 'buffer', maxBuffer: 512 * 1024 * 1024 }).stdout || Buffer.alloc(0);
+      for (const args of [['rev-parse', '--verify', '-q', 'HEAD'], ['status', '--porcelain', '-z'], ['diff', 'HEAD', '--binary']]) {
+        hash.update(sub(args));
+      }
+      // diff HEAD leaves out untracked files, so hash their contents too.
+      for (const inner of sub(['ls-files', '--others', '--exclude-standard', '-z']).toString('utf8').split('\0').filter(Boolean).sort()) {
+        const innerFull = path.join(full, inner);
+        hash.update(`\0${inner}\0`);
+        if (!isSymlink(innerFull) && fs.existsSync(innerFull) && fs.statSync(innerFull).isFile()) hash.update(fs.readFileSync(innerFull));
+      }
     } else {
       hash.update(fs.readFileSync(full));
     }
   }
   return hash.digest('hex').slice(0, 16);
+}
+
+/**
+ * The checkpoint's fingerprint across every repo in the run. For a single-repo
+ * run this is exactly the repo's own fingerprint, so gates recorded by earlier
+ * versions stay fresh.
+ */
+function fingerprint(p, cp) {
+  const { run } = loadRun(p);
+  const repos = repoList(p, run);
+  if (!isMulti(run)) return repoFingerprint(p, repos[0].root, baseOf(cp, repos[0]));
+  const hash = crypto.createHash('sha256');
+  for (const repo of repos) hash.update(`\0${repo.name}\0${repoFingerprint(p, repo.root, baseOf(cp, repo))}`);
+  return hash.digest('hex').slice(0, 16);
+}
+
+/** Repos with changes since the checkpoint began. */
+function changedRepos(p, run, cp) {
+  return repoList(p, run).filter(repo => {
+    const dirty = git(repo.root, ['status', '--porcelain', '--', ...pathspec(p, repo.root)]).toString('utf8').trim();
+    return dirty || headOrEmptyTree(repo.root) !== baseOf(cp, repo);
+  }).map(r => r.name);
+}
+
+/** In a multi-repo run, name repos that changed although the checkpoint doesn't list them. */
+function outOfScope(p, run, cp) {
+  if (!isMulti(run) || !cp.base) return [];
+  return changedRepos(p, run, cp).filter(name => !(cp.repos || []).includes(name));
 }
 
 function isSymlink(file) {
@@ -219,24 +337,27 @@ function isSymlink(file) {
   }
 }
 
-function assertClean(p) {
-  const out = git(p.root, ['status', '--porcelain', '--', ...pathspec(p)]).toString('utf8').trim();
-  if (out) {
-    fail(`the working tree has uncommitted changes — commit the previous checkpoint (or stash) before beginning another:\n${out}`);
+function assertClean(p, run) {
+  for (const repo of repoList(p, run)) {
+    const out = git(repo.root, ['status', '--porcelain', '--', ...pathspec(p, repo.root)]).toString('utf8').trim();
+    if (out) {
+      const where = repo.single ? 'the working tree has' : `repo '${repo.name}' has`;
+      fail(`${where} uncommitted changes — commit the previous checkpoint (or stash) before beginning another:\n${out}`);
+    }
   }
 }
 
 /**
- * Write the working tree (tracked and untracked, minus our state) as a git
+ * Write a repo's working tree (tracked and untracked, minus our state) as a git
  * tree object, using a throwaway index so the user's staging area is untouched.
  */
-function snapshotTree(p, baseRef) {
+function snapshotTree(p, root, baseRef) {
   const index = path.join(p.base, `index.${process.pid}.tmp`);
   const env = { GIT_INDEX_FILE: index };
   try {
-    git(p.root, ['read-tree', baseRef], env);
-    git(p.root, ['add', '-A', '--', ...pathspec(p)], env);
-    return git(p.root, ['write-tree'], env).toString('utf8').trim();
+    git(root, ['read-tree', baseRef], env);
+    git(root, ['add', '-A', '--', ...pathspec(p, root)], env);
+    return git(root, ['write-tree'], env).toString('utf8').trim();
   } finally {
     fs.rmSync(index, { force: true });
   }
@@ -307,7 +428,7 @@ function readEvidence(p, cpId, gate) {
 }
 
 /** Validate checkpoint input and give each one a stable, script-assigned id. */
-function normalizeCheckpoints(input, startIndex, origin) {
+function normalizeCheckpoints(input, startIndex, origin, repoNames = null) {
   const list = Array.isArray(input) ? input : input && input.checkpoints;
   if (!Array.isArray(list) || list.length === 0) {
     fail('checkpoint file must be a non-empty JSON array (or { "checkpoints": [...] })');
@@ -324,12 +445,22 @@ function normalizeCheckpoints(input, startIndex, origin) {
     if (!Array.isArray(item.tests) || item.tests.length === 0 || item.tests.some(t => typeof t !== 'string' || !t.trim())) {
       fail(`${where} ('${item.title}') has no tests — plan the test cases before the human approves the list`);
     }
+    let repos;
+    if (repoNames) {
+      if (!Array.isArray(item.repos) || item.repos.length === 0) {
+        fail(`${where} ('${item.title}') needs 'repos' — the repos it changes, from: ${repoNames.join(', ')}`);
+      }
+      const unknown = item.repos.filter(name => !repoNames.includes(name));
+      if (unknown.length) fail(`${where} ('${item.title}') names unknown repo '${unknown[0]}' — known: ${repoNames.join(', ')}`);
+      repos = [...new Set(item.repos)];
+    }
     return {
       id: `CP${startIndex + i + 1}`,
       title: item.title.trim(),
       done: item.done.trim(),
       ui: item.ui,
       tests: item.tests.map(t => t.trim()),
+      ...(repos ? { repos } : {}),
       origin,
       approved: false,
       status: 'pending',
@@ -398,8 +529,8 @@ function explainGate(name, state, cpId) {
   return `${name} for ${cpId} ${hints[state] || `is '${state}'`}`;
 }
 
-function runCommand(p, cmd) {
-  const result = spawnSync(cmd, { cwd: p.root, shell: true, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
+function runCommand(root, cmd) {
+  const result = spawnSync(cmd, { cwd: root, shell: true, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
   const output = `${result.stdout || ''}${result.stderr || ''}`.trimEnd();
   const tail = output.split('\n').slice(-OUTPUT_TAIL_LINES).join('\n');
   const exit = result.status === null ? 1 : result.status;
@@ -443,7 +574,7 @@ function advance(p, cpId, { by = null, source = 'cli' } = {}) {
   const { run, state } = loadRun(p);
   const cp = findCheckpoint(state, cpId);
   requireActive(cp);
-  const fp = fingerprint(p, cp.base);
+  const fp = fingerprint(p, cp);
   const states = gateStates(p, cp, fp);
   if (states.red !== 'pass') fail(explainGate('the red run', states.red, cp.id));
   if (states.tests !== 'pass') fail(explainGate('gate 1 (tests)', states.tests, cp.id));
@@ -589,7 +720,7 @@ function nextAction(p, state, run) {
       }
       return viewer ? `human approves ${active.id} in the viewer; agent runs: theseus.js wait` : `get human approval: theseus.js advance ${active.id} --approved-by NAME`;
     }
-    const s = gateStates(p, active, fingerprint(p, active.base));
+    const s = gateStates(p, active, fingerprint(p, active));
     if (s.red !== 'pass') return `write failing tests: theseus.js record ${active.id} red`;
     if (s.tests !== 'pass') return `make the tests pass: theseus.js record ${active.id} tests`;
     if (!PASSING.has(s.visual)) {
@@ -619,7 +750,7 @@ function screenshots(p, cpId) {
 function snapshot(p) {
   const { run, state } = loadRun(p);
   const checkpoints = state.checkpoints.map(cp => {
-    const gates = isActive(cp) ? gateStates(p, cp, fingerprint(p, cp.base)) : null;
+    const gates = isActive(cp) ? gateStates(p, cp, fingerprint(p, cp)) : null;
     const evidence = {};
     for (const gate of ['red', 'tests', 'visual', 'review']) evidence[gate] = readEvidence(p, cp.id, gate);
     const isolationNone = ['visual', 'review'].some(g => evidence[g] && Object.values(evidence[g].reviewers || {}).some(r => r.isolation === 'none'));
@@ -643,7 +774,7 @@ function snapshot(p) {
 /** What an agent needs from `status --json`: no log, no test output, no evidence bodies. */
 function summary(snap) {
   return {
-    run: { key: snap.run.key, ...settingsOf(snap.run), approvalCredit: snap.run.approvalCredit },
+    run: { key: snap.run.key, ...settingsOf(snap.run), approvalCredit: snap.run.approvalCredit, ...(isMulti(snap.run) ? { repos: snap.run.repos.map(r => r.name) } : {}) },
     checkpoints: snap.checkpoints.map(c => ({
       id: c.id,
       title: c.title,
@@ -652,6 +783,7 @@ function summary(snap) {
       approved: c.approved,
       done: c.done,
       tests: c.tests,
+      ...(c.repos ? { repos: c.repos } : {}),
       gates: c.gates,
       approval: c.approval,
       isolationNone: c.isolationNone,
@@ -665,10 +797,40 @@ function summary(snap) {
 
 // ── commands ─────────────────────────────────────────────────────────────────
 
+/**
+ * `--repos api,web,shared=../libs/shared`: each entry is a path, or name=path,
+ * relative to the folder the run is started in, and must be a repo's top level.
+ */
+function parseRepos(cwd, flags) {
+  const start = fs.realpathSync(cwd);
+  const repos = flags.repos.split(',').map(s => s.trim()).filter(Boolean).map(entry => {
+    const eq = entry.indexOf('=');
+    const rel = eq === -1 ? entry : entry.slice(eq + 1).trim();
+    const full = path.resolve(start, rel);
+    const name = (eq === -1 ? path.basename(full) : entry.slice(0, eq)).trim();
+    if (!/^[A-Za-z0-9._-]+$/.test(name)) fail(`repo name '${name}' may only use letters, digits, '.', '_' and '-'`);
+    if (!fs.existsSync(full) || !fs.statSync(full).isDirectory()) fail(`--repos: '${rel}' is not a folder`);
+    if (gitTop(full) !== fs.realpathSync(full)) fail(`--repos: '${rel}' is not the top level of a git repository`);
+    return { name, path: path.relative(start, fs.realpathSync(full)) || '.', testCmd: stringFlag(flags, `test-cmd-${name}`) };
+  });
+  if (repos.length === 0) fail('--repos needs at least one repo');
+  const names = repos.map(r => r.name);
+  const dup = names.find((n, i) => names.indexOf(n) !== i);
+  if (dup) fail(`--repos: the name '${dup}' is used twice — give one of them a name, e.g. ${dup}2=path`);
+  return repos;
+}
+
 function cmdInit(cwd, { flags }) {
-  const p = resolvePaths(cwd, { create: true });
-  const existing = resolvePaths(cwd);
-  if (fs.existsSync(existing.runFile)) {
+  const multi = typeof flags.repos === 'string';
+  const repos = multi ? parseRepos(cwd, flags) : null;
+  const p = multi ? pathsFor(fs.realpathSync(cwd), path.join(fs.realpathSync(cwd), STATE_DIR)) : resolvePaths(cwd, { create: true });
+  let existing = null;
+  try {
+    existing = resolvePaths(cwd);
+  } catch (error) {
+    if (!multi) throw error;
+  }
+  if (existing && fs.existsSync(existing.runFile)) {
     fail(`a run is already active (key ${readJson(existing.runFile).key}) in ${existing.base} — resume it (theseus.js status) or finish and archive it first`);
   }
   const autonomy = stringFlag(flags, 'autonomy') || 'step';
@@ -688,6 +850,7 @@ function cmdInit(cwd, { flags }) {
     approvalCredit: 0,
     settingsVersion: 0,
     settingsAcked: 0,
+    ...(repos ? { repos } : {}),
     created: new Date().toISOString(),
   };
   fs.mkdirSync(p.base, { recursive: true });
@@ -696,6 +859,7 @@ function cmdInit(cwd, { flags }) {
   save(p, run, { checkpoints: [] });
   log(p, 'init', { key: run.key, autonomy, approvals, granularity });
   console.log(`theseus: run '${run.key}' started in ${path.relative(cwd, p.base) || p.base} (autonomy: ${autonomy}, approvals: ${approvals}, checkpoint size: ${granularity})`);
+  if (repos) console.log(`theseus: repos in this run: ${repos.map(x => `${x.name} (${x.path})`).join(', ')} — every gate covers all of them`);
   console.log('theseus: start the viewer and give the human its link: theseus.js serve');
 }
 
@@ -704,7 +868,7 @@ function cmdPlan(p, { flags }) {
   if (state.checkpoints.some(c => c.status !== 'pending')) {
     fail('checkpoints are already in progress — append new ones with: theseus.js add --file F');
   }
-  state.checkpoints = normalizeCheckpoints(readJson(requireFlag(flags, 'file')), 0, 'plan');
+  state.checkpoints = normalizeCheckpoints(readJson(requireFlag(flags, 'file')), 0, 'plan', repoNames(run));
   save(p, run, state);
   log(p, 'planned', { count: state.checkpoints.length });
   console.log(`theseus: ${state.checkpoints.length} checkpoint(s) planned at size ${settingsOf(run).granularity} — the human reviews and approves them in the viewer`);
@@ -712,7 +876,7 @@ function cmdPlan(p, { flags }) {
 
 function cmdAdd(p, { flags }) {
   const { run, state } = loadRun(p);
-  const added = normalizeCheckpoints(readJson(requireFlag(flags, 'file')), state.checkpoints.length, 'feedback');
+  const added = normalizeCheckpoints(readJson(requireFlag(flags, 'file')), state.checkpoints.length, 'feedback', repoNames(run));
   state.checkpoints.push(...added);
   save(p, run, state);
   log(p, 'added', { cps: added.map(c => c.id) });
@@ -736,9 +900,11 @@ function cmdBegin(p, { positionals }) {
   if (active) fail(`${active.id} is still '${active.status}' — one checkpoint at a time`);
   const earlier = state.checkpoints.slice(0, state.checkpoints.indexOf(cp)).find(c => c.status !== 'done');
   if (earlier) fail(`${earlier.id} comes first and is not done — checkpoints run in order`);
-  assertClean(p);
+  assertClean(p, run);
   cp.status = 'building';
-  cp.base = headOrEmptyTree(p.root);
+  cp.base = isMulti(run)
+    ? Object.fromEntries(repoList(p, run).map(repo => [repo.name, headOrEmptyTree(repo.root)]))
+    : headOrEmptyTree(p.root);
   cp.stopBlocks = 0;
   fs.rmSync(path.join(p.evidence, cp.id), { recursive: true, force: true });
   save(p, run, state);
@@ -747,8 +913,9 @@ function cmdBegin(p, { positionals }) {
 }
 
 function recordCommand(p, run, cp, gate, flags, fp) {
+  if (isMulti(run)) return recordCommandMulti(p, run, cp, gate, flags, fp);
   const cmd = stringFlag(flags, 'cmd') || run.testCmd;
-  const { exit, tail } = runCommand(p, cmd);
+  const { exit, tail } = runCommand(p.root, cmd);
   if (gate === 'red') {
     if (exit === 0) {
       fail(`red run passed — the tests for ${cp.id} must fail before the implementation exists (a test that has never failed has proven nothing)`);
@@ -762,6 +929,32 @@ function recordCommand(p, run, cp, gate, flags, fp) {
   log(p, 'gate', { cp: cp.id, gate: 'tests', result: exit === 0 ? 'pass' : `fail (exit ${exit})` });
   if (exit !== 0) fail(`tests failed (exit ${exit}) — gate 1 not passed for ${cp.id}:\n${tail}`);
   console.log(`theseus: ${cp.id} gate 1 (tests) passed.`);
+}
+
+/** Gate 1 across repos: the test command runs in each of the checkpoint's repos. */
+function recordCommandMulti(p, run, cp, gate, flags, fp) {
+  const override = stringFlag(flags, 'cmd');
+  const runs = checkpointRepos(p, run, cp).map(repo => {
+    const cmd = override || repo.testCmd;
+    return { repo: repo.name, cmd, ...runCommand(repo.root, cmd) };
+  });
+  const failed = runs.filter(x => x.exit !== 0);
+  const at = new Date().toISOString();
+  if (gate === 'red') {
+    if (failed.length === 0) {
+      fail(`red run passed in every repo (${runs.map(x => x.repo).join(', ')}) — the tests for ${cp.id} must fail before the implementation exists (a test that has never failed has proven nothing)`);
+    }
+    writeJson(evidenceFile(p, cp.id, 'red'), { runs, fp, at });
+    log(p, 'gate', { cp: cp.id, gate: 'red', result: `failed as required in ${failed.map(x => x.repo).join(', ')}` });
+    console.log(`theseus: ${cp.id} red recorded (failing in ${failed.map(x => x.repo).join(', ')}). Build it, then: theseus.js record ${cp.id} tests`);
+    return;
+  }
+  writeJson(evidenceFile(p, cp.id, 'tests'), { runs, fp, passed: failed.length === 0, at });
+  log(p, 'gate', { cp: cp.id, gate: 'tests', result: failed.length ? `fail in ${failed.map(x => `${x.repo} (exit ${x.exit})`).join(', ')}` : 'pass' });
+  if (failed.length) {
+    fail(`tests failed in ${failed.map(x => `${x.repo} (exit ${x.exit})`).join(', ')} — gate 1 not passed for ${cp.id}:\n${failed.map(x => `── ${x.repo}\n${x.tail}`).join('\n')}`);
+  }
+  console.log(`theseus: ${cp.id} gate 1 (tests) passed in ${runs.map(x => x.repo).join(', ')}.`);
 }
 
 function recordPanel(p, cp, gate, flags, fp, states) {
@@ -804,7 +997,7 @@ function recordPanel(p, cp, gate, flags, fp, states) {
     fp,
     at,
   };
-  if (gate === 'review') evidence.reviewedTree = snapshotTree(p, cp.base);
+  if (gate === 'review') evidence.reviewedTree = reviewTrees(p, cp);
   writeJson(file, evidence);
   const after = panelState(evidence, fp);
   const label = gate === 'visual' ? 'gate 2 (visual)' : 'gate 3 (review)';
@@ -826,7 +1019,7 @@ function cmdRecord(p, { positionals, flags }) {
     fail(`unknown gate '${gate}' — one of red, tests, visual, review`);
   }
   requireActive(cp);
-  const fp = fingerprint(p, cp.base);
+  const fp = fingerprint(p, cp);
   const states = gateStates(p, cp, fp);
   if (gate === 'tests' && states.red !== 'pass') {
     fail(`no failing red run recorded for ${cp.id} — write the tests first and record them failing: theseus.js record ${cp.id} red`);
@@ -834,6 +1027,9 @@ function cmdRecord(p, { positionals, flags }) {
   if (cp.status !== 'building') {
     cp.status = 'building';
     save(p, run, state);
+  }
+  for (const name of outOfScope(p, run, cp)) {
+    console.log(`theseus: warning — ${cp.id} also changed ${name}, which it doesn't list in its repos`);
   }
   if (gate === 'red' || gate === 'tests') {
     recordCommand(p, run, cp, gate, flags, fp);
@@ -967,23 +1163,45 @@ function cmdStatus(p, { flags }) {
   if (w.isolationNone.length) console.log(`  WARNING: reviewed without context isolation: ${w.isolationNone.join(', ')}`);
   if (w.cliApprovals.length) console.log(`  approval reported by agent, not clicked by a human: ${w.cliApprovals.join(', ')}`);
   if (w.deferredApprovals.length) console.log(`  approval deferred to PR review: ${w.deferredApprovals.join(', ')}`);
+  if (isMulti(snap.run)) {
+    console.log(`  repos: ${snap.run.repos.map(x => x.name).join(', ')}`);
+    const active = snap.checkpoints.find(isActive);
+    if (active) for (const name of outOfScope(p, snap.run, active)) console.log(`  warning: ${active.id} also changed ${name}, which it doesn't list in its repos`);
+  }
   const server = liveServer(p);
   if (server) console.log(`  viewer: ${server.url}`);
   console.log(`  next: ${snap.next}`);
 }
 
+/** What the reviewers saw: a tree per repo (a plain string for a single-repo run). */
+function reviewTrees(p, cp) {
+  const { run } = loadRun(p);
+  if (!isMulti(run)) return snapshotTree(p, p.root, cp.base);
+  return Object.fromEntries(repoList(p, run).map(repo => [repo.name, snapshotTree(p, repo.root, baseOf(cp, repo))]));
+}
+
 function cmdDiff(p, { positionals, flags }) {
-  const { state } = loadRun(p);
+  const { run, state } = loadRun(p);
   const cp = findCheckpoint(state, positionals[0]);
   if (!cp.base) fail(`${cp.id} has not begun, so it has no diff yet`);
-  let from = cp.base;
+  let reviewed = null;
   if (flags['since-review']) {
     const review = readEvidence(p, cp.id, 'review');
     if (!review || !review.reviewedTree) fail(`no review recorded yet for ${cp.id} — give reviewers the full diff: theseus.js diff ${cp.id}`);
-    from = review.reviewedTree;
+    reviewed = review.reviewedTree;
   }
-  const now = snapshotTree(p, cp.base);
-  const out = git(p.root, ['diff', from, now, '--', ...pathspec(p)]).toString('utf8');
+  let out = '';
+  if (!isMulti(run)) {
+    const now = snapshotTree(p, p.root, cp.base);
+    out = git(p.root, ['diff', reviewed || cp.base, now, '--', ...pathspec(p)]).toString('utf8');
+  } else {
+    // Prefix each repo's paths with its name, so reviewers see a/api/src/x.ts.
+    for (const repo of repoList(p, run)) {
+      const from = reviewed ? reviewed[repo.name] : baseOf(cp, repo);
+      const now = snapshotTree(p, repo.root, baseOf(cp, repo));
+      out += git(repo.root, ['diff', `--src-prefix=a/${repo.name}/`, `--dst-prefix=b/${repo.name}/`, from, now, '--', ...pathspec(p, repo.root)]).toString('utf8');
+    }
+  }
   process.stdout.write(out || `(no changes${flags['since-review'] ? ' since the last review' : ''})\n`);
 }
 
@@ -1001,7 +1219,7 @@ function cmdCheck(cwd) {
     const { run, state } = loadRun(p);
     const cp = state.checkpoints.find(c => c.status === 'building');
     if (!cp) return 0;
-    if (gatesComplete(gateStates(p, cp, fingerprint(p, cp.base)))) return 0;
+    if (gatesComplete(gateStates(p, cp, fingerprint(p, cp)))) return 0;
     if ((cp.stopBlocks || 0) >= MAX_STOP_BLOCKS) return 0;
     cp.stopBlocks = (cp.stopBlocks || 0) + 1;
     save(p, run, state);
@@ -1187,7 +1405,8 @@ function agentFile(target, role, { model, effort, maxTurns }) {
 }
 
 function cmdAgents(cwd, { flags }) {
-  const root = gitRoot(cwd);
+  // The repo it's run in, or — for a multi-repo session — the folder holding them.
+  const root = gitTop(cwd) || fs.realpathSync(cwd);
   const targets = (stringFlag(flags, 'target') || 'claude,copilot').split(',').map(s => s.trim()).filter(Boolean);
   for (const t of targets) if (!['claude', 'copilot'].includes(t)) fail(`--target must be claude, copilot or both, not '${t}'`);
   const files = [];
@@ -1260,7 +1479,7 @@ async function main(argv) {
       // The background server is told exactly where its state is, so it never
       // depends on where it happened to be spawned.
       const foreground = process.env.THESEUS_STATE && args.flags.foreground;
-      const p = foreground ? pathsFor(gitRoot(process.cwd()), process.env.THESEUS_STATE) : resolvePaths(process.cwd());
+      const p = foreground ? foregroundPaths(process.env.THESEUS_STATE) : resolvePaths(process.cwd());
       // Output that is handed to subagents verbatim stays free of notices.
       const pure = command === 'diff' || command === 'learnings' || (command === 'status' && args.flags.json);
       if (!foreground && !pure && command !== 'wait') announceSettings(p);
@@ -1273,6 +1492,13 @@ async function main(argv) {
     console.error(`theseus: ${error.message}`);
     return 1;
   }
+}
+
+/** The background server is told exactly where its state is; work out its root the same way. */
+function foregroundPaths(base) {
+  const dir = path.dirname(base);
+  if (readRepos(base)) return pathsFor(dir, base);
+  return pathsFor(gitRoot(dir), base);
 }
 
 /** End each command with what to do next, so the agent never needs `status` for it. */

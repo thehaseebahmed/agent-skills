@@ -66,6 +66,10 @@ a missing `node`.
   approve checkpoints. In Claude Code on the web, the link points inside the cloud
   container and is not reachable. Start those runs with `--approvals any` or
   `--autonomy unattended`.
+- **Several repos:** start the session in the folder that holds them and run
+  `theseus.js init --repos api,web …` there. The Stop hook finds that run from inside
+  any of the listed repos. Run `theseus.js agents` in that same folder, since Claude
+  Code reads `.claude/agents/` from the session's project folder.
 - **Agents:** `theseus.js agents --target claude` writes
   `.claude/agents/theseus-planner.md`, `theseus-builder.md` and
   `theseus-reviewer.md`. These are lean by default, to cut the start-up cost of each

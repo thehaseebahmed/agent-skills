@@ -56,6 +56,11 @@ Its state goes in `.theseus/` in the directory Copilot is working in.
 
 ### Custom agents with their own model
 
+For work across several repos, start one run from the folder that holds them:
+`theseus.js init --repos api,web …`. Copilot reads `.github/agents/` per repository,
+so run `theseus.js agents` inside each repo you open with Copilot. *Unverified:* how
+Copilot picks up agents when a workspace opens a parent folder of several repos.
+
 `theseus.js agents` writes `.github/agents/theseus-planner.agent.md`,
 `theseus-builder.agent.md` and `theseus-reviewer.agent.md`. Each has a narrow `tools`
 list, and planning and review can run on a different model from the main session:

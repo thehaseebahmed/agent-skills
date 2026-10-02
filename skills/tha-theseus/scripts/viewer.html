@@ -304,7 +304,9 @@
           <span class="tick">${o.value === current ? '✓' : ''}</span><span>${esc(o.text)}<small>${esc(o.hint)}</small></span>
         </button>`).join('')}</div>` : '';
       return `<span class="setting"><button class="chip toggle" data-menu="${key}" aria-haspopup="menu" aria-expanded="${opened}">${esc(label)}</button>${menu}</span>`;
-    }).join('') + `<span class="chip">${data.checkpoints.filter(c => c.status === 'done').length}/${data.checkpoints.length} done</span>`;
+    }).join('')
+      + (r.repos ? `<span class="chip" title="Every gate covers all of these repos">repos: ${esc(r.repos.map(x => x.name).join(', '))}</span>` : '')
+      + `<span class="chip">${data.checkpoints.filter(c => c.status === 'done').length}/${data.checkpoints.length} done</span>`;
     $('next').innerHTML = `<b>Next:</b> ${esc(data.next)}`;
     $('reference').textContent = `Reference: ${r.reference}${r.arch.length ? ` · Standards: ${r.arch.join(', ')}` : ''}`;
   }
@@ -352,7 +354,9 @@
     const ev = cp.evidence[gate];
     if (!ev) return '<p class="empty">Not run yet.</p>';
     if (gate === 'red' || gate === 'tests') {
-      return `<div class="muted">$ ${esc(ev.cmd)} · exit ${esc(ev.exit)} · ${esc(ago(ev.at))}</div>${ev.tail ? `<pre>${esc(ev.tail)}</pre>` : ''}`;
+      // Multi-repo runs record one command per repo; single-repo runs one command.
+      const runs = ev.runs || [{ cmd: ev.cmd, exit: ev.exit, tail: ev.tail }];
+      return runs.map(x => `<div class="muted">${x.repo ? `<b>${esc(x.repo)}</b> · ` : ''}$ ${esc(x.cmd)} · exit ${esc(x.exit)} · ${esc(ago(ev.at))}</div>${x.tail ? `<pre>${esc(x.tail)}</pre>` : ''}`).join('');
     }
     const parts = [];
     if (ev.skip) parts.push(`<p>Skipped: ${esc(ev.skip.reason)}</p>`);
@@ -380,7 +384,7 @@
     $('detail').innerHTML = `
       <h3>${esc(cp.title)}</h3>
       <div class="meta"><span class="id">${esc(cp.id)}</span><span class="badge b-${esc(cp.status)}">${esc(cp.status.replace('-', ' '))}</span>
-        <span>${cp.ui ? 'UI checkpoint' : 'no UI'}</span>${cp.origin === 'feedback' ? '<span>from your feedback</span>' : ''}${cp.approved ? '' : '<span class="pill s-waiting">plan not approved</span>'}</div>
+        <span>${cp.ui ? 'UI checkpoint' : 'no UI'}</span>${cp.repos ? `<span>repos: ${esc(cp.repos.join(', '))}</span>` : ''}${cp.origin === 'feedback' ? '<span>from your feedback</span>' : ''}${cp.approved ? '' : '<span class="pill s-waiting">plan not approved</span>'}</div>
       <div class="section"><h4>Done when</h4><div>${esc(cp.done)}</div></div>
       <div class="section"><h4>Planned tests</h4><ul class="tests">${cp.tests.map(t => `<li>${esc(t)}</li>`).join('')}</ul></div>
       <div class="section"><h4>Gates</h4>

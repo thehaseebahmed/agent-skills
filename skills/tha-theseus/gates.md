@@ -28,6 +28,12 @@ ignores the state directory.
   click-through.
 - Use `--cmd` to run the checkpoint's tests narrowly while iterating. Run the full
   suite at least once before `advance`, so a regression elsewhere can't hide.
+- **Multi-repo runs:** the test command runs in each repo the checkpoint lists, in
+  that repo's root.
+  - Red needs at least one repo failing; gate 1 needs every one passing.
+  - A change in *any* repo of the run makes passed gates stale, including repos the
+    checkpoint doesn't list.
+  - `theseus diff` shows every repo, with each path prefixed by its repo's name.
 
 ## Gate 2: Visual
 

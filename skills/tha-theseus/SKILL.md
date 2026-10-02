@@ -129,6 +129,14 @@ Settle these with the human before anything else:
    (`ARCHITECTURE.md`, UI guidelines, `CONTRIBUTING.md`). If none exist, the human
    names the rules, and each goes in with `theseus learn --source human`.
 3. **Test command:** the repo's own command.
+   - **Several repos?** Start one run from the folder that holds them, with
+     `--repos api,web` (a path, or `name=path`). Give `--test-cmd-<name>` where a
+     repo's command differs.
+   - Every gate then covers every listed repo: clean-tree checks, fingerprints and
+     the reviewers' diff.
+   - Each checkpoint names the repos it changes. A change outside them is flagged.
+   - A git submodule is reviewed only as a commit line. List it in `--repos` to
+     review inside it.
 4. **Autonomy:**
 
    | Level | Human approves |

@@ -77,6 +77,7 @@ in [testing-patterns](../../references/testing-patterns.md).
     "title": "Leave balance never goes negative",
     "done": "requesting more days than the balance is rejected with a message naming the balance",
     "ui": false,
+    "repos": ["api"],
     "tests": [
       "request within balance is accepted and balance decreases",
       "request equal to balance is accepted and balance reaches zero",
@@ -94,6 +95,10 @@ in [testing-patterns](../../references/testing-patterns.md).
   }
 ]
 ```
+
+`repos` names the repos a checkpoint changes. It is required when the run spans
+several repos, and is left out otherwise. One checkpoint may span repos when the
+change is one vertical slice, such as an API field and the form that shows it.
 
 The script assigns the ids (`CP1`, `CP2`, …). Write titles and `done` in plain
 language: the human approves this list by reading it in the viewer, and if they can't
