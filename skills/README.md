@@ -13,7 +13,7 @@ skills/
 
 | Skill | What it does |
 |---|---|
-| [`tha-planning`](tha-planning/SKILL.md) | Turns a spec into a per-layer change inventory (`plan.md`) and a test-first, wave-ordered task list (`tasks.md`) |
+| [`tha-theseus`](tha-theseus/SKILL.md) | Builds or migrates work one small checkpoint at a time behind four enforced gates — red-then-green tests, visual parity, two isolated adversarial reviewers, human approval — with a learnings file that later checkpoints read, and a live local viewer where the human approves |
 
 To add one:
 

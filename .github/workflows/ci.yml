@@ -11,6 +11,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The backwards-compatibility test runs an earlier commit's theseus.js.
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -24,7 +27,7 @@ jobs:
         run: node scripts/validate-manifests.js
 
       - name: Unit tests
-        run: node --test "scripts/**/*.test.js"
+        run: node --test "scripts/**/*.test.js" "skills/**/*.test.js"
 
       - name: Check the skill template still lints clean
         run: |

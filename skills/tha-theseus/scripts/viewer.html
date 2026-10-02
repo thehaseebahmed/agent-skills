@@ -1,0 +1,712 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Theseus Viewer</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --panel-2: #f0f2f5; --border: #dfe3e8;
+    --text: #1b1f24; --muted: #5c6670; --faint: #8a939c;
+    --accent: #3b5bdb; --accent-text: #ffffff;
+    --pass: #1f8a4c; --pass-bg: #e3f4ea;
+    --warn: #a35c00; --warn-bg: #fdf0dc;
+    --fail: #c0362c; --fail-bg: #fbe5e3;
+    --info: #2f6db5; --info-bg: #e3eefa;
+    --none: #8a939c; --none-bg: #eef0f3;
+    --shadow: 0 1px 2px rgba(16, 24, 40, .06), 0 1px 3px rgba(16, 24, 40, .08);
+    --radius: 10px;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115; --panel: #171a21; --panel-2: #1e222b; --border: #2a2f3a;
+      --text: #e6e9ef; --muted: #a2abb7; --faint: #6f7987;
+      --accent: #7c95ff; --accent-text: #0f1115;
+      --pass: #4cc38a; --pass-bg: #15301f;
+      --warn: #f0a945; --warn-bg: #33270f;
+      --fail: #f2766c; --fail-bg: #3a1a18;
+      --info: #75a9f0; --info-bg: #142538;
+      --none: #6f7987; --none-bg: #222631;
+      --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  button, textarea { font: inherit; color: inherit; }
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 16px; }
+
+  header.top {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px;
+    padding: 14px 16px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius); box-shadow: var(--shadow);
+  }
+  .brand { font-weight: 700; letter-spacing: .02em; }
+  .brand small { color: var(--muted); font-weight: 500; margin-left: 6px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { padding: 2px 8px; border-radius: 999px; background: var(--panel-2); color: var(--muted); font-size: 12px; border: 1px solid var(--border); }
+  .live { margin-left: auto; display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--none); }
+  .dot.on { background: var(--pass); box-shadow: 0 0 0 3px var(--pass-bg); }
+  .dot.off { background: var(--fail); }
+  .next { width: 100%; color: var(--muted); font-size: 13px; }
+  .setting { position: relative; display: inline-block; }
+  .chip.toggle { cursor: pointer; font: inherit; font-size: 12px; }
+  .chip.toggle::after { content: " ▾"; color: var(--faint); }
+  .chip.toggle:hover, .chip.toggle[aria-expanded="true"] { border-color: var(--accent); color: var(--text); }
+  .chip.toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .menu { position: absolute; top: calc(100% + 4px); left: 0; z-index: 20; min-width: 230px; max-width: calc(100vw - 32px); padding: 4px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 20px rgba(16, 24, 40, .14); }
+  .menu button { display: flex; gap: 8px; width: 100%; text-align: left; padding: 7px 10px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; font-size: 13px; }
+  .menu button:hover, .menu button:focus-visible { background: var(--panel-2); outline: none; }
+  .menu button .tick { flex: none; width: 1em; color: var(--accent); }
+  .menu button small { display: block; color: var(--muted); font-size: 12px; }
+  .menu button:disabled { opacity: .55; cursor: default; }
+  .next b { color: var(--text); font-weight: 600; }
+  .reference { width: 100%; font-size: 12px; color: var(--faint); overflow-wrap: anywhere; }
+
+  .banner {
+    margin-top: 12px; padding: 14px 16px; border-radius: var(--radius);
+    background: var(--info-bg); border: 1px solid var(--border);
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+  }
+  .banner.warn { background: var(--warn-bg); }
+  .banner p { margin: 0; flex: 1 1 280px; }
+  .card { margin-top: 12px; }
+  .card .body h3 { margin: 0 0 6px; font-size: 16px; }
+  .card ul { margin: 4px 0 0; padding-left: 18px; }
+  .card .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px 20px; margin-top: 10px; }
+  .card h4 { margin: 10px 0 2px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-top: 8px; }
+  .stat { background: var(--panel-2); border-radius: 8px; padding: 8px 10px; }
+  .stat b { display: block; font-size: 18px; }
+  .stat span { font-size: 12px; color: var(--muted); }
+  .menu .group { padding: 6px 10px 2px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); }
+
+  .grid { display: grid; grid-template-columns: minmax(260px, 340px) 1fr; gap: 12px; margin-top: 12px; }
+  .lower { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 12px; }
+  @media (max-width: 900px) { .grid, .lower { grid-template-columns: 1fr; } }
+
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); min-width: 0; }
+  .panel > h2 { margin: 0; padding: 12px 16px; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); border-bottom: 1px solid var(--border); }
+  .panel .body { padding: 12px 16px; }
+
+  .timeline { list-style: none; margin: 0; padding: 8px; }
+  .cp {
+    display: block; width: 100%; text-align: left; cursor: pointer;
+    padding: 10px 12px; margin: 0 0 6px; border-radius: 8px;
+    background: transparent; border: 1px solid transparent;
+  }
+  .cp:hover { background: var(--panel-2); }
+  .cp.sel { background: var(--panel-2); border-color: var(--accent); }
+  .cp .row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+  .cp .id { font-family: var(--mono); font-size: 12px; color: var(--faint); }
+  .cp .title { font-weight: 600; flex: 1 1 150px; min-width: 0; overflow-wrap: anywhere; }
+  .pills { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+  .pill { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--none-bg); color: var(--none); white-space: nowrap; }
+  .s-pass { background: var(--pass-bg); color: var(--pass); }
+  .s-skip, .s-carried, .s-deferred, .s-off { background: var(--info-bg); color: var(--info); }
+  .s-stale, .s-partial, .s-waiting { background: var(--warn-bg); color: var(--warn); }
+  .s-fail, .s-findings { background: var(--fail-bg); color: var(--fail); }
+
+  .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; text-transform: uppercase; letter-spacing: .04em; font-weight: 600; }
+  .b-pending { background: var(--none-bg); color: var(--muted); }
+  .b-building { background: var(--info-bg); color: var(--info); }
+  .b-awaiting-approval { background: var(--warn-bg); color: var(--warn); }
+  .b-done { background: var(--pass-bg); color: var(--pass); }
+
+  .detail h3 { margin: 0 0 4px; font-size: 18px; overflow-wrap: anywhere; }
+  .meta { color: var(--muted); font-size: 13px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .section { margin-top: 16px; }
+  .section h4 { margin: 0 0 6px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .tests { margin: 0; padding-left: 18px; }
+  .gate { border: 1px solid var(--border); border-radius: 8px; margin-top: 8px; }
+  .gate summary { cursor: pointer; padding: 8px 12px; display: flex; gap: 8px; align-items: center; list-style: none; }
+  .gate summary::-webkit-details-marker { display: none; }
+  .gate summary .name { font-weight: 600; flex: 1; }
+  .gate .inner { padding: 0 12px 12px; }
+  pre { margin: 6px 0 0; padding: 10px; background: var(--panel-2); border-radius: 6px; overflow: auto; max-height: 260px; font: 12px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  td.nowrap, th { white-space: nowrap; }
+  td.note { min-width: 160px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  .shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; margin-top: 8px; }
+  .shots a { display: block; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: var(--panel-2); }
+  .shots img { display: block; width: 100%; height: 120px; object-fit: cover; }
+  .shots span { display: block; font-size: 11px; padding: 4px 6px; color: var(--muted); overflow-wrap: anywhere; }
+
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  .btn { border: 1px solid var(--border); background: var(--panel); padding: 7px 14px; border-radius: 8px; cursor: pointer; font-weight: 600; }
+  .btn:hover { background: var(--panel-2); }
+  .btn.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  .btn.primary:hover { filter: brightness(1.08); }
+  .btn:disabled { opacity: .55; cursor: default; }
+  textarea { width: 100%; min-height: 72px; resize: vertical; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel-2); }
+  textarea:focus, .btn:focus-visible, .cp:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  .list { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow: auto; }
+  .list li { padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .list li:last-child { border-bottom: 0; }
+  .list .when { color: var(--faint); font-size: 11px; display: block; }
+  .empty { color: var(--faint); font-style: italic; }
+  .toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); max-width: calc(100% - 32px); padding: 10px 14px; border-radius: 8px; background: var(--text); color: var(--bg); box-shadow: var(--shadow); font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+  .toast.err { background: var(--fail); color: #fff; }
+  .muted { color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">Theseus<small id="key">connecting…</small></div>
+    <div class="chips" id="chips"></div>
+    <div class="live"><span class="dot" id="dot"></span><span id="live">connecting</span></div>
+    <div class="next" id="next"></div>
+    <div class="reference" id="reference"></div>
+  </header>
+
+  <div id="banners"></div>
+  <div id="brief"></div>
+  <div id="summary"></div>
+
+  <div class="grid">
+    <section class="panel">
+      <h2>Checkpoints</h2>
+      <ol class="timeline" id="timeline"></ol>
+    </section>
+    <section class="panel detail">
+      <div class="body" id="detail"><p class="empty">No checkpoints planned yet.</p></div>
+    </section>
+  </div>
+
+  <div class="lower">
+    <section class="panel">
+      <h2>Send feedback</h2>
+      <div class="body">
+        <p class="muted" style="margin:0 0 8px">Goes to the agent's inbox. Change requests become new checkpoints that pass every gate.</p>
+        <textarea id="general-feedback" placeholder="What should change?"></textarea>
+        <div class="actions"><button class="btn" id="send-general">Send feedback</button></div>
+      </div>
+    </section>
+    <section class="panel">
+      <h2>Learnings</h2>
+      <div class="body"><ul class="list" id="learnings"></ul></div>
+    </section>
+    <section class="panel">
+      <h2>Activity</h2>
+      <div class="body"><ul class="list" id="activity"></ul></div>
+    </section>
+  </div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(() => {
+  const token = new URLSearchParams(location.search).get('t') || '';
+  const $ = id => document.getElementById(id);
+  const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  let data = null;
+  let selected = decodeURIComponent(location.hash.slice(1)) || null;
+  const drafts = {};
+  const open = {};
+
+  const SETTINGS = {
+    autonomy: {
+      label: 'approve',
+      options: [
+        { value: 'step', short: 'every checkpoint', text: 'Every checkpoint', hint: 'You approve each one in here.' },
+        { value: 'batch:2', short: 'every 2 checkpoints', text: 'Every 2 checkpoints', hint: 'One approval covers the next two.' },
+        { value: 'batch:3', short: 'every 3 checkpoints', text: 'Every 3 checkpoints', hint: 'One approval covers the next three.' },
+        { value: 'batch:5', short: 'every 5 checkpoints', text: 'Every 5 checkpoints', hint: 'One approval covers the next five.' },
+        { value: 'unattended', short: 'in the PR', text: 'Only in the PR', hint: 'The agent stops asking; you review the pull request.' },
+      ],
+    },
+    approvals: {
+      label: 'approvals from',
+      options: [
+        { value: 'viewer', short: 'viewer only', text: 'This viewer only', hint: 'Only your clicks here count as approval.' },
+        { value: 'any', short: 'viewer or agent', text: 'Viewer or agent', hint: 'The agent may also record an approval you give in chat.' },
+      ],
+    },
+    visual: {
+      label: 'visual review',
+      fallback: 'on',
+      options: [
+        { value: 'on', short: 'on', text: 'On', hint: 'UI checkpoints are compared with the reference by two blind reviewers.' },
+        { value: 'off', short: 'off', text: 'Off', hint: 'Skip the visual comparison for every checkpoint.' },
+      ],
+    },
+    reviewers: {
+      label: 'code reviewers',
+      fallback: '2',
+      options: [
+        { value: '2', short: '2', text: 'Two reviewers', hint: 'Two independent reviewers; both must be clean.' },
+        { value: '1', short: '1', text: 'One reviewer', hint: 'One reviewer, who must be clean.' },
+        { value: '0', short: 'none', text: 'No code review', hint: 'Skip code review for every checkpoint.' },
+      ],
+    },
+  };
+  let openMenu = null;
+  let live = null;      // the active run, as the server streams it
+  let viewing = null;   // key of another run being looked at, read-only
+  const isReadOnly = () => Boolean(viewing && (!live || !live.run || live.run.key !== viewing));
+  const runsList = () => (live && live.runs) || (data && data.runs) || [];
+
+  const GATES = [['red', 'Red'], ['tests', 'Tests'], ['visual', 'Visual'], ['review', 'Review']];
+  const LABEL = { pass: 'pass', skip: 'skipped', carried: 'carried', stale: 'stale', fail: 'failed', findings: 'findings', partial: 'partial', none: '—', off: 'off' };
+
+  function ago(iso) {
+    if (!iso) return '';
+    const s = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+    if (s < 60) return `${Math.max(s, 0)}s ago`;
+    if (s < 3600) return `${Math.round(s / 60)}m ago`;
+    if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+    return new Date(iso).toLocaleDateString();
+  }
+
+  function gateState(cp, gate) {
+    if (cp.status === 'done') return 'pass';
+    return cp.gates ? cp.gates[gate] : 'none';
+  }
+
+  function humanState(cp) {
+    if (cp.status === 'done') return cp.approval && cp.approval.deferred ? ['deferred', 'PR'] : ['pass', 'approved'];
+    if (cp.status === 'awaiting-approval') return ['waiting', 'your call'];
+    return ['none', '—'];
+  }
+
+  function pills(cp) {
+    const out = GATES.map(([g, name]) => {
+      const s = gateState(cp, g);
+      return `<span class="pill s-${s}" title="${name}: ${LABEL[s]}">${name} · ${LABEL[s]}</span>`;
+    });
+    const [hs, hl] = humanState(cp);
+    out.push(`<span class="pill s-${hs}" title="Human: ${hl}">Human · ${hl}</span>`);
+    return out.join('');
+  }
+
+  function toast(message, error) {
+    const t = $('toast');
+    t.textContent = message;
+    t.className = `toast show${error ? ' err' : ''}`;
+    clearTimeout(toast.timer);
+    toast.timer = setTimeout(() => { t.className = 'toast'; }, 4000);
+  }
+
+  async function post(url, body) {
+    const res = await fetch(`${url}?t=${encodeURIComponent(token)}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-theseus-token': token },
+      body: JSON.stringify(body || {}),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(json.error || `request failed (${res.status})`);
+    return json;
+  }
+
+  async function act(button, fn) {
+    button.disabled = true;
+    try {
+      const result = await fn();
+      toast(result.message || 'Done.');
+      return true;
+    } catch (error) {
+      toast(error.message, true);
+      return false;
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  function runPicker(currentKey) {
+    const runs = runsList();
+    const opened = openMenu === 'run';
+    const label = (r) => `${r.key} · ${r.active ? 'active' : r.place === 'runs' ? 'paused' : r.status} · ${r.done}/${r.total}`;
+    const group = (title, list) => list.length ? `<div class="group">${title}</div>${list.map(r => `
+      <button role="menuitemradio" aria-checked="${r.key === currentKey}" data-view-run="${esc(r.active ? '' : r.key)}">
+        <span class="tick">${r.key === currentKey ? '✓' : ''}</span><span>${esc(label(r))}</span>
+      </button>`).join('')}` : '';
+    const menu = opened ? `<div class="menu" role="menu">${group('Open', runs.filter(r => r.place !== 'archive'))}${group('History', runs.filter(r => r.place === 'archive'))}</div>` : '';
+    return `<span class="setting"><button class="chip toggle" data-menu="run" aria-haspopup="menu" aria-expanded="${opened}">run: ${esc(currentKey || 'none')}</button>${menu}</span>`;
+  }
+
+  function renderHeader() {
+    if (!data || data.error) {
+      $('chips').innerHTML = runPicker(null);
+      return;
+    }
+    const r = data.run;
+    $('key').textContent = r.key;
+    const ro = isReadOnly();
+    // Each setting is a chip. Clicking it lists the choices; picking one saves it at once.
+    $('chips').innerHTML = runPicker(r.key) + Object.entries(SETTINGS).map(([key, def]) => {
+      const current = r[key] === undefined ? def.fallback : String(r[key]);
+      const opened = openMenu === key;
+      const choice = def.options.find(o => o.value === current);
+      const label = `${def.label}: ${choice ? choice.short : current}`;
+      const menu = opened ? `<div class="menu" role="menu">${def.options.map(o => `
+        <button role="menuitemradio" aria-checked="${o.value === current}" data-setting="${key}" data-to="${esc(o.value)}"${o.value === current ? ' disabled' : ''}>
+          <span class="tick">${o.value === current ? '✓' : ''}</span><span>${esc(o.text)}<small>${esc(o.hint)}</small></span>
+        </button>`).join('')}</div>` : '';
+      if (ro) return `<span class="chip">${esc(label)}</span>`;
+      return `<span class="setting"><button class="chip toggle" data-menu="${key}" aria-haspopup="menu" aria-expanded="${opened}">${esc(label)}</button>${menu}</span>`;
+    }).join('')
+      + (r.repos ? `<span class="chip" title="Every gate covers all of these repos">repos: ${esc(r.repos.map(x => x.name).join(', '))}</span>` : '')
+      + `<span class="chip">${data.checkpoints.filter(c => c.status === 'done').length}/${data.checkpoints.length} done</span>`;
+    $('next').innerHTML = `<b>Next:</b> ${esc(data.next)}`;
+    $('reference').textContent = `Reference: ${r.reference}${r.arch.length ? ` · Standards: ${r.arch.join(', ')}` : ''}`;
+  }
+
+  function renderBanners() {
+    const out = [];
+    const status = data.run.status || 'open';
+    if (isReadOnly()) {
+      const entry = runsList().find(x => x.key === viewing);
+      const where = entry ? (entry.place === 'runs' ? 'paused' : entry.status) : status;
+      out.push(`<div class="banner"><p><b>Viewing ${esc(viewing)}</b> (${esc(where)}) — read-only.</p>${entry && entry.place === 'runs' ? `<button class="btn primary" data-switch="${esc(viewing)}">Make active</button>` : ''}<button class="btn" data-view-run="">Back to the active run</button></div>`);
+      $('banners').innerHTML = out.join('');
+      return;
+    }
+    if (status === 'completing' || status === 'abandoning') {
+      const completing = status === 'completing';
+      out.push(`<div class="banner warn"><p><b>The agent asks to ${completing ? 'complete' : 'abandon'} this run.</b> ${completing ? 'Every checkpoint is done.' : `Reason: ${esc(data.run.closeReason || '—')}`} Confirming saves a summary and moves the run to History.</p><button class="btn primary" data-close="confirm">Confirm ${completing ? 'complete' : 'abandon'}</button><button class="btn" data-close="keep">Keep open</button></div>`);
+    }
+    const unapproved = data.checkpoints.filter(c => !c.approved);
+    if (unapproved.length) {
+      out.push(`<div class="banner"><p><b>${unapproved.length} checkpoint${unapproved.length > 1 ? 's' : ''} need your approval</b> before any code is written (${unapproved.map(c => esc(c.id)).join(', ')}). Read each one's done-criteria and tests below.</p><button class="btn primary" id="approve-plan">Approve plan</button></div>`);
+    }
+    const waiting = data.checkpoints.find(c => c.status === 'awaiting-approval');
+    if (waiting) {
+      const auto = data.run.autonomy === 'unattended' || (data.run.autonomy.startsWith('batch:') && data.run.approvalCredit > 0);
+      out.push(auto
+        ? `<div class="banner"><p><b>${esc(waiting.id)} passed gates 1–3.</b> Your current autonomy setting doesn't need your approval, so the agent will advance it on its next step. You can still approve it or request changes.</p><button class="btn" data-select="${esc(waiting.id)}">Review it</button></div>`
+        : `<div class="banner warn"><p><b>${esc(waiting.id)} passed gates 1–3</b> and is waiting for you: ${esc(waiting.title)}</p><button class="btn" data-select="${esc(waiting.id)}">Review it</button></div>`);
+    }
+    const w = data.warnings;
+    if (w.isolationNone.length) out.push(`<div class="banner warn"><p>Reviewed <b>without context isolation</b>: ${w.isolationNone.map(esc).join(', ')}. Treat those reviews with suspicion.</p></div>`);
+    if (w.cliApprovals.length) out.push(`<div class="banner warn"><p>Approval <b>reported by the agent</b>, not clicked here: ${w.cliApprovals.map(esc).join(', ')}.</p></div>`);
+    $('banners').innerHTML = out.join('');
+  }
+
+  function listBlock(title, items) {
+    return items && items.length ? `<div><h4>${esc(title)}</h4><ul>${items.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>` : '';
+  }
+
+  function renderBrief() {
+    const b = data.run.brief;
+    if (!b) {
+      $('brief').innerHTML = data.run.briefRequired && !data.checkpoints.length
+        ? '<section class="panel card"><div class="body"><p class="empty">The agent is doing a light read of the reference and will post its understanding here for you to confirm before any planning.</p></div></section>'
+        : '';
+      return;
+    }
+    const pill = { pending: '<span class="pill s-waiting">waiting for you</span>', draft: '<span class="pill s-stale">changes requested</span>', confirmed: '<span class="pill s-pass">confirmed</span>' }[b.status] || '';
+    const body = `
+      <p><b>Goal:</b> ${esc(b.goal)}</p>
+      <p><b>What I understand:</b> ${esc(b.understanding)}</p>
+      <div class="cols">
+        ${listBlock('Checkpoints will cover', b.areas)}
+        ${listBlock('In scope', b.in_scope)}
+        ${listBlock('Out of scope', b.out_of_scope)}
+        ${listBlock('Assumptions', b.assumptions)}
+        ${listBlock('Open questions', b.questions)}
+      </div>
+      ${b.status === 'pending' && !isReadOnly() ? `
+        <p class="muted" style="margin-top:12px">Nothing is researched in depth or planned until you confirm this.</p>
+        <textarea data-keep="brief-changes" placeholder="What did it get wrong or miss? (needed for Request changes)"></textarea>
+        <div class="actions"><button class="btn primary" id="approve-brief">Confirm understanding</button><button class="btn" id="brief-changes">Request changes</button></div>` : ''}`;
+    // Once confirmed and planned, keep it out of the way.
+    $('brief').innerHTML = b.status === 'confirmed' && data.checkpoints.length
+      ? `<details class="panel card"><summary class="body" style="cursor:pointer"><b>Brief</b> ${pill}</summary><div class="body">${body}</div></details>`
+      : `<section class="panel card"><div class="body"><h3>Brief — what the agent understood ${pill}</h3>${body}</div></section>`;
+  }
+
+  function renderSummary() {
+    const sm = data.summary;
+    if (!sm) {
+      $('summary').innerHTML = '';
+      return;
+    }
+    const stat = (value, label) => `<div class="stat"><b>${esc(value)}</b><span>${esc(label)}</span></div>`;
+    $('summary').innerHTML = `<section class="panel card"><div class="body">
+      <h3>Run ${esc(sm.status)}${sm.reason ? ` — ${esc(sm.reason)}` : ''}</h3>
+      <div class="stats">
+        ${stat(`${sm.checkpoints.done}/${sm.checkpoints.total}`, 'checkpoints done')}
+        ${stat(sm.approvals.viewer, 'approved by you')}
+        ${stat(sm.approvals.agent, 'reported by agent')}
+        ${stat(sm.approvals.deferred, 'deferred to PR')}
+        ${stat(`${sm.reviews.code.verdicts} / ${sm.reviews.code.findings}`, 'code verdicts / findings')}
+        ${stat(`${sm.reviews.visual.verdicts} / ${sm.reviews.visual.findings}`, 'visual verdicts / findings')}
+        ${stat(sm.withoutIsolation, 'reviews without isolation')}
+        ${stat(sm.learningsAdded, 'learnings added')}
+        ${stat(sm.durationMinutes === null ? '—' : sm.durationMinutes < 120 ? `${sm.durationMinutes} min` : `${Math.round(sm.durationMinutes / 60)} h`, 'duration')}
+      </div></div></section>`;
+  }
+
+  function renderTimeline() {
+    if (!data.checkpoints.length) {
+      $('timeline').innerHTML = '<li class="empty" style="padding:8px">The agent has not planned any checkpoints yet.</li>';
+      return;
+    }
+    $('timeline').innerHTML = data.checkpoints.map(cp => `
+      <li><button class="cp${cp.id === selected ? ' sel' : ''}" data-select="${esc(cp.id)}">
+        <span class="row"><span class="id">${esc(cp.id)}</span><span class="title">${esc(cp.title)}</span><span class="badge b-${esc(cp.status)}">${esc(cp.status.replace('-', ' '))}</span></span>
+        <span class="pills">${pills(cp)}</span>
+      </button></li>`).join('');
+  }
+
+  function reviewerTable(ev) {
+    const rows = Object.entries(ev.reviewers || {});
+    if (!rows.length) return '';
+    return `<div class="scroll"><table><tr><th>Reviewer</th><th>Findings</th><th>Isolation</th><th>Note</th><th>When</th></tr>${rows.map(([id, r]) => `
+      <tr><td>${esc(id)}</td><td><span class="pill s-${r.findings ? 'findings' : 'pass'}">${r.findings}</span></td>
+      <td>${r.isolation === 'none' ? '<span class="pill s-stale">none</span>' : 'subagent'}</td><td class="note">${esc(r.note || '')}</td><td class="nowrap">${esc(ago(r.at))}</td></tr>`).join('')}</table></div>`;
+  }
+
+  function gateBody(cp, gate) {
+    const ev = cp.evidence[gate];
+    if (!ev) return '<p class="empty">Not run yet.</p>';
+    if (gate === 'red' || gate === 'tests') {
+      // Multi-repo runs record one command per repo; single-repo runs one command.
+      const runs = ev.runs || [{ cmd: ev.cmd, exit: ev.exit, tail: ev.tail }];
+      return runs.map(x => `<div class="muted">${x.repo ? `<b>${esc(x.repo)}</b> · ` : ''}$ ${esc(x.cmd)} · exit ${esc(x.exit)} · ${esc(ago(ev.at))}</div>${x.tail ? `<pre>${esc(x.tail)}</pre>` : ''}`).join('');
+    }
+    const parts = [];
+    if (ev.skip) parts.push(`<p>Skipped: ${esc(ev.skip.reason)}</p>`);
+    if (ev.carry) parts.push(`<p>Carried forward: ${esc(ev.carry.reason)}</p>`);
+    parts.push(reviewerTable(ev));
+    if (gate === 'visual' && cp.screenshots.length) {
+      parts.push(`<div class="shots">${cp.screenshots.map(f => {
+        const src = `/evidence/${encodeURIComponent(cp.id)}/${encodeURIComponent(f)}?t=${encodeURIComponent(token)}`;
+        return `<a href="${src}" target="_blank" rel="noopener"><img src="${src}" alt="${esc(f)}" loading="lazy"><span>${esc(f)}</span></a>`;
+      }).join('')}</div>`);
+    }
+    return parts.join('') || '<p class="empty">No verdicts yet.</p>';
+  }
+
+  function renderDetail() {
+    const cp = data.checkpoints.find(c => c.id === selected);
+    if (!cp) {
+      $('detail').innerHTML = '<p class="empty">Select a checkpoint.</p>';
+      return;
+    }
+    const approval = cp.approval
+      ? (cp.approval.deferred ? 'Approval deferred to PR review.' : `Approved by ${cp.approval.by}${cp.approval.source === 'cli' ? ' (reported by agent)' : ''}${cp.approval.batch ? ' (batch)' : ''}.`)
+      : '';
+    const waiting = cp.status === 'awaiting-approval';
+    $('detail').innerHTML = `
+      <h3>${esc(cp.title)}</h3>
+      <div class="meta"><span class="id">${esc(cp.id)}</span><span class="badge b-${esc(cp.status)}">${esc(cp.status.replace('-', ' '))}</span>
+        <span>${cp.ui ? 'UI checkpoint' : 'no UI'}</span>${cp.repos ? `<span>repos: ${esc(cp.repos.join(', '))}</span>` : ''}${cp.origin === 'feedback' ? '<span>from your feedback</span>' : ''}${cp.approved ? '' : '<span class="pill s-waiting">plan not approved</span>'}</div>
+      <div class="section"><h4>Done when</h4><div>${esc(cp.done)}</div></div>
+      <div class="section"><h4>Planned tests</h4><ul class="tests">${cp.tests.map(t => `<li>${esc(t)}</li>`).join('')}</ul></div>
+      <div class="section"><h4>Gates</h4>
+        ${GATES.map(([g, name]) => {
+          const s = gateState(cp, g);
+          const key = `${cp.id}:${g}`;
+          return `<details class="gate" data-open="${esc(key)}"${open[key] ? ' open' : ''}><summary><span class="name">${name}</span><span class="pill s-${s}">${LABEL[s]}</span></summary><div class="inner">${gateBody(cp, g)}</div></details>`;
+        }).join('')}
+      </div>
+      <div class="section"><h4>Human</h4>
+        ${approval ? `<p>${esc(approval)}</p>` : ''}
+        ${waiting && !isReadOnly() ? `
+          <p>Gates 1–3 passed at the current code. Approve to mark it done, or ask for changes and it goes back to building.</p>
+          <textarea data-keep="changes-${esc(cp.id)}" placeholder="What should change? (needed for Request changes)"></textarea>
+          <div class="actions"><button class="btn primary" data-approve="${esc(cp.id)}">Approve ${esc(cp.id)}</button><button class="btn" data-changes="${esc(cp.id)}">Request changes</button></div>`
+          : (approval ? '' : '<p class="empty">Nothing to decide yet.</p>')}
+      </div>`;
+  }
+
+  function renderLists() {
+    $('learnings').innerHTML = data.learnings.length
+      ? data.learnings.slice().reverse().map(l => `<li>${esc(l.text)}<span class="when">${esc([l.cp, l.source, l.date].filter(Boolean).join(' · '))}</span></li>`).join('')
+      : '<li class="empty">None yet. Every finding and piece of feedback becomes one.</li>';
+    const describe = e => {
+      switch (e.event) {
+        case 'gate': return `${e.cp} ${e.gate}${e.reviewer ? ` (${e.reviewer})` : ''}: ${e.result}`;
+        case 'begin': return `${e.cp} started`;
+        case 'approved': return `${e.cp} approved${e.deferred ? ' (deferred to PR)' : e.by ? ` by ${e.by}` : ''}`;
+        case 'awaiting-approval': return `${e.cp} waiting for your approval`;
+        case 'plan-approved': return `plan approved (${(e.cps || []).join(', ')})`;
+        case 'changes-requested': return `changes requested on ${e.cp}: ${e.text}`;
+        case 'feedback': return `feedback${e.cp ? ` on ${e.cp}` : ''}: ${e.text}`;
+        case 'learned': return `learned: ${e.text}`;
+        case 'planned': return `${e.count} checkpoints planned`;
+        case 'added': return `added ${(e.cps || []).join(', ')}`;
+        case 'init': return `run ${e.key} started`;
+        case 'brief-submitted': return `brief submitted (${e.areas} area${e.areas === 1 ? '' : 's'})`;
+        case 'brief-approved': return `brief confirmed${e.by ? ` by ${e.by}` : ''}`;
+        case 'brief-changes-requested': return `changes requested on the brief: ${e.text}`;
+        case 'completion-requested': return 'agent asked to complete the run';
+        case 'abandon-requested': return `agent asked to abandon the run: ${e.reason}`;
+        case 'run-kept-open': return 'run kept open';
+        case 'run-completed': return 'run completed';
+        case 'run-abandoned': return `run abandoned: ${e.reason}`;
+        case 'run-paused': return `run paused (switched to ${e.to})`;
+        case 'run-resumed': return `run resumed${e.from ? ` (from ${e.from})` : ''}`;
+        case 'settings-changed': return `settings changed by ${e.by}: ${(e.changes || []).map(c => `${c.key} ${c.from} → ${c.to}`).join(', ')}`;
+        case 'learnings-replaced': return `learnings compacted: ${e.from} → ${e.to}`;
+        default: return e.event;
+      }
+    };
+    $('activity').innerHTML = data.log.length
+      ? data.log.slice().reverse().map(e => `<li>${esc(describe(e))}<span class="when">${esc(ago(e.at))}</span></li>`).join('')
+      : '<li class="empty">Nothing yet.</li>';
+  }
+
+  function render() {
+    if (!data) return;
+    if (data.error) {
+      // No active run: offer the others from the run picker.
+      $('key').textContent = '';
+      $('chips').innerHTML = runPicker(null);
+      $('next').textContent = data.error;
+      $('reference').textContent = '';
+      for (const id of ['banners', 'brief', 'summary', 'timeline']) $(id).innerHTML = '';
+      $('detail').innerHTML = '<p class="empty">No active run. Pick one from the run menu to view it.</p>';
+      return;
+    }
+    if (!selected || !data.checkpoints.some(c => c.id === selected)) {
+      const pick = data.checkpoints.find(c => c.status === 'awaiting-approval') || data.checkpoints.find(c => c.status === 'building') || data.checkpoints.find(c => c.status === 'pending') || data.checkpoints[data.checkpoints.length - 1];
+      selected = pick ? pick.id : null;
+    }
+    // Re-rendering replaces the DOM; keep what the human is typing and where their cursor is.
+    const focused = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.keep : null;
+    const caret = focused ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
+    renderHeader();
+    renderBanners();
+    renderBrief();
+    renderSummary();
+    renderTimeline();
+    renderDetail();
+    renderLists();
+    document.querySelectorAll('textarea[data-keep]').forEach(el => {
+      el.value = drafts[el.dataset.keep] || '';
+      if (el.dataset.keep === focused) {
+        el.focus();
+        el.setSelectionRange(caret[0], caret[1]);
+      }
+    });
+  }
+
+  document.addEventListener('input', e => {
+    if (e.target.dataset && e.target.dataset.keep) drafts[e.target.dataset.keep] = e.target.value;
+  });
+  document.addEventListener('toggle', e => {
+    if (e.target.dataset && e.target.dataset.open) open[e.target.dataset.open] = e.target.open;
+  }, true);
+
+  document.addEventListener('click', async e => {
+    const el = e.target.closest('button');
+    if (openMenu && !(el && (el.dataset.menu || el.dataset.setting || el.dataset.viewRun !== undefined))) {
+      openMenu = null;
+      renderHeader();
+    }
+    if (!el) return;
+    if (el.dataset.menu) {
+      openMenu = openMenu === el.dataset.menu ? null : el.dataset.menu;
+      renderHeader();
+      if (openMenu) {
+        const first = document.querySelector('.menu button:not([disabled])');
+        if (first) first.focus();
+      }
+    } else if (el.dataset.viewRun !== undefined) {
+      openMenu = null;
+      await viewRun(el.dataset.viewRun || null);
+    } else if (el.dataset.switch) {
+      if (await act(el, () => post('/api/switch', { key: el.dataset.switch }))) viewing = null;
+    } else if (el.dataset.close) {
+      await act(el, () => post('/api/close', { decision: el.dataset.close }));
+    } else if (el.id === 'approve-brief') {
+      await act(el, () => post('/api/approve-brief'));
+    } else if (el.id === 'brief-changes') {
+      const text = (drafts['brief-changes'] || '').trim();
+      if (!text) return toast('Say what it got wrong or missed first.', true);
+      if (await act(el, () => post('/api/feedback', { brief: true, text }))) drafts['brief-changes'] = '';
+    } else if (el.dataset.select) {
+      selected = el.dataset.select;
+      history.replaceState(null, '', `${location.search}#${encodeURIComponent(selected)}`);
+      render();
+    } else if (el.id === 'approve-plan') {
+      await act(el, () => post('/api/approve-plan'));
+    } else if (el.dataset.approve) {
+      await act(el, () => post(`/api/approve/${encodeURIComponent(el.dataset.approve)}`));
+    } else if (el.dataset.changes) {
+      const id = el.dataset.changes;
+      const text = (drafts[`changes-${id}`] || '').trim();
+      if (!text) return toast('Say what should change first.', true);
+      if (await act(el, () => post('/api/feedback', { cp: id, text }))) drafts[`changes-${id}`] = '';
+    } else if (el.dataset.setting) {
+      openMenu = null;
+      await act(el, () => post('/api/settings', { [el.dataset.setting]: el.dataset.to }));
+      renderHeader();
+    } else if (el.id === 'send-general') {
+      const box = $('general-feedback');
+      const text = box.value.trim();
+      if (!text) return toast('Write some feedback first.', true);
+      if (await act(el, () => post('/api/feedback', { cp: null, text }))) box.value = '';
+    }
+    return undefined;
+  });
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && openMenu) {
+      const key = openMenu;
+      openMenu = null;
+      renderHeader();
+      const chip = document.querySelector(`[data-menu="${key}"]`);
+      if (chip) chip.focus();
+    }
+  });
+
+  function setLive(on) {
+    $('dot').className = `dot ${on ? 'on' : 'off'}`;
+    $('live').textContent = on ? 'live' : 'reconnecting…';
+  }
+
+  const events = new EventSource(`/api/events?t=${encodeURIComponent(token)}`);
+  events.onopen = () => setLive(true);
+  events.onerror = () => setLive(false);
+  async function viewRun(key) {
+    if (!key || (live && live.run && live.run.key === key)) {
+      viewing = null;
+      data = live;
+      selected = null;
+      render();
+      return;
+    }
+    const res = await fetch(`/api/state?run=${encodeURIComponent(key)}&t=${encodeURIComponent(token)}`);
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) return toast(json.error || 'Could not open that run.', true);
+    viewing = key;
+    data = json;
+    selected = null;
+    render();
+    return undefined;
+  }
+
+  events.onmessage = e => {
+    setLive(true);
+    live = JSON.parse(e.data);
+    // A run being viewed read-only stays on screen; the run list still refreshes.
+    if (isReadOnly()) {
+      if (data) data.runs = live.runs;
+      renderHeader();
+      renderBanners();
+      return;
+    }
+    viewing = null;
+    data = live;
+    render();
+  };
+  setInterval(() => { if (data) renderLists(); }, 30000);
+  if (!token) $('next').textContent = 'This link has no token. Open the exact link theseus.js serve printed.';
+})();
+</script>
+</body>
+</html>
