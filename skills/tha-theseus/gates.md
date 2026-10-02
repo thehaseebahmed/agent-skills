@@ -39,6 +39,9 @@ ignores the state directory.
 
 **Requires** gate 1 passed at the current code (enforced).
 
+With the run's visual review set to `off`, this gate shows `off` and counts as passed
+for every checkpoint, UI ones included. `record … visual` is then refused.
+
 ### `ui: false`
 
 `theseus record CP visual --skip "<reason>"` needs a reason, and is refused on a
@@ -82,6 +85,13 @@ reviewers still work.
 ## Gate 3: Adversarial review
 
 **Requires** gates 1 and 2 passed at the current code (enforced).
+
+The run's `reviewers` setting is the exact number of code reviewers: 0, 1 or 2.
+- At 0 the gate shows `off`, counts as passed, and `record … review` is refused.
+- At 1 or 2 the gate passes when that many distinct reviewers are clean at the
+  current code.
+- A reviewer id beyond that number is refused; re-reviews reuse the same ids.
+- Where this section says "two", read "the run's count".
 
 - Two reviewer subagents, dispatched separately. Each is given:
   - [reviewer.md](reviewer.md)

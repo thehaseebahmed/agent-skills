@@ -90,6 +90,7 @@ a missing `node`.
   - **`omitClaudeMd`** needs Claude Code v2.1.271 or later, per that page. On older
     versions, expect the field to be ignored and the agent to load CLAUDE.md as
     before.
-- **Settings mid-run:** autonomy and approvals can be changed at any time by clicking
-  their chip in the viewer's header. The agent sees a `settings changed` line on
+- **Settings mid-run:** autonomy, approvals, visual review (on/off) and the number of
+  code reviewers (0–2) can be changed at any time by clicking their chip in the
+  viewer's header. The agent sees a `settings changed` line on
   its next command.

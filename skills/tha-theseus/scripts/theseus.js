@@ -28,7 +28,7 @@ const crypto = require('node:crypto');
 const { spawnSync, spawn } = require('node:child_process');
 
 const STATE_DIR = '.theseus';
-const REVIEWERS_REQUIRED = 2;
+const REVIEWERS_REQUIRED = 2; // visual reviewers; code reviewers come from the run's `reviewers` setting
 const MAX_STOP_BLOCKS = 3;
 const OUTPUT_TAIL_LINES = 40;
 const LOG_LIMIT = 200;
@@ -39,6 +39,8 @@ const APPROVALS = ['viewer', 'any'];
 const GRANULARITY = ['xs-s', 's-m'];
 const DEFAULT_GRANULARITY = 's-m';
 const LEARNINGS_COMPACT_AT = 40;
+const VISUAL = ['on', 'off'];
+const REVIEWER_COUNTS = ['0', '1', '2'];
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const IMAGE_TYPES = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif' };
 
@@ -46,9 +48,10 @@ const USAGE = `usage: theseus.js <command> [args]
 
   init --key K --reference R --test-cmd C [--arch a.md,b.md]
        [--autonomy step|batch:N|unattended] [--approvals viewer|any] [--granularity xs-s|s-m]
+       [--visual on|off] [--reviewers 0|1|2]
   init … --repos api,web[,name=path] [--test-cmd-<name> C]
                                       one run across several repos (from the folder holding them)
-  config [--autonomy …] [--approvals …] [--granularity …]
+  config [--autonomy …] [--approvals …] [--granularity …] [--visual on|off] [--reviewers 0|1|2]
                                       change settings mid-run (the CLI may only tighten under --approvals viewer)
   serve [--port ${DEFAULT_PORT}]            start the live viewer in the background; prints its link
   stop                                stop the viewer
@@ -471,14 +474,14 @@ function normalizeCheckpoints(input, startIndex, origin, repoNames = null) {
 
 // ── gates ────────────────────────────────────────────────────────────────────
 
-/** A panel (visual or review) passes when enough distinct reviewers are clean at this fingerprint. */
-function panelState(evidence, fp) {
+/** A panel (visual or review) passes when `required` distinct reviewers are clean at this fingerprint. */
+function panelState(evidence, fp, required = REVIEWERS_REQUIRED) {
   if (!evidence) return 'none';
   if (evidence.skip && evidence.skip.fp === fp) return 'skip';
   if (evidence.carry && evidence.carry.fp === fp) return 'carried';
   const reviewers = Object.values(evidence.reviewers || {});
   const current = reviewers.filter(r => r.fp === fp);
-  if (current.length >= REVIEWERS_REQUIRED && current.every(r => r.findings === 0)) return 'pass';
+  if (current.length >= required && current.every(r => r.findings === 0)) return 'pass';
   if (current.some(r => r.findings > 0)) return 'findings';
   if (reviewers.length > 0 || evidence.skip || evidence.carry) {
     return current.length > 0 ? 'partial' : 'stale';
@@ -499,32 +502,39 @@ function commandState(evidence, fp) {
   return evidence.fp === fp ? 'pass' : 'stale';
 }
 
+/** How many code reviewers the run deploys (0 turns gate 3 off). Runs that predate the setting use 2. */
+function codeReviewers(run) {
+  return Number(settingsOf(run).reviewers);
+}
+
 function gateStates(p, cp, fp) {
+  const { run } = loadRun(p);
+  const reviewers = codeReviewers(run);
   return {
     red: readEvidence(p, cp.id, 'red') ? 'pass' : 'none',
     tests: commandState(readEvidence(p, cp.id, 'tests'), fp),
-    visual: panelState(readEvidence(p, cp.id, 'visual'), fp),
-    review: panelState(readEvidence(p, cp.id, 'review'), fp),
+    visual: settingsOf(run).visual === 'off' ? 'off' : panelState(readEvidence(p, cp.id, 'visual'), fp),
+    review: reviewers === 0 ? 'off' : panelState(readEvidence(p, cp.id, 'review'), fp, reviewers),
   };
 }
 
-const PASSING = new Set(['pass', 'skip', 'carried']);
+const PASSING = new Set(['pass', 'skip', 'carried', 'off']);
 
 function gatesComplete(states) {
-  return states.red === 'pass' && states.tests === 'pass' && PASSING.has(states.visual) && states.review === 'pass';
+  return states.red === 'pass' && states.tests === 'pass' && PASSING.has(states.visual) && PASSING.has(states.review);
 }
 
 function isActive(cp) {
   return cp.status === 'building' || cp.status === 'awaiting-approval';
 }
 
-function explainGate(name, state, cpId) {
+function explainGate(name, state, cpId, required = REVIEWERS_REQUIRED) {
   const hints = {
     none: 'has not been run',
     stale: 'passed against older code — the code changed after it passed, so it must run again',
     fail: 'failed',
     findings: 'has open findings — fix them, re-run the affected gates, then review again',
-    partial: `has fewer than ${REVIEWERS_REQUIRED} distinct clean reviewers at the current code`,
+    partial: `has fewer than ${required} distinct clean reviewer${required === 1 ? '' : 's'} at the current code`,
   };
   return `${name} for ${cpId} ${hints[state] || `is '${state}'`}`;
 }
@@ -579,7 +589,7 @@ function advance(p, cpId, { by = null, source = 'cli' } = {}) {
   if (states.red !== 'pass') fail(explainGate('the red run', states.red, cp.id));
   if (states.tests !== 'pass') fail(explainGate('gate 1 (tests)', states.tests, cp.id));
   if (!PASSING.has(states.visual)) fail(explainGate('gate 2 (visual)', states.visual, cp.id));
-  if (states.review !== 'pass') fail(explainGate('gate 3 (review)', states.review, cp.id));
+  if (!PASSING.has(states.review)) fail(explainGate('gate 3 (review)', states.review, cp.id, codeReviewers(run)));
 
   let approval;
   if (run.autonomy === 'unattended') {
@@ -613,7 +623,13 @@ function advance(p, cpId, { by = null, source = 'cli' } = {}) {
 }
 
 function settingsOf(run) {
-  return { autonomy: run.autonomy, approvals: run.approvals, granularity: run.granularity || DEFAULT_GRANULARITY };
+  return {
+    autonomy: run.autonomy,
+    approvals: run.approvals,
+    granularity: run.granularity || DEFAULT_GRANULARITY,
+    visual: run.visual || 'on',
+    reviewers: run.reviewers === undefined ? '2' : String(run.reviewers),
+  };
 }
 
 /** step is strictest; a larger batch is looser; unattended is loosest. */
@@ -627,6 +643,8 @@ function validateSettings(changes) {
   if (changes.autonomy !== undefined && !AUTONOMY.test(changes.autonomy)) fail(`autonomy must be step, batch:N or unattended, not '${changes.autonomy}'`);
   if (changes.approvals !== undefined && !APPROVALS.includes(changes.approvals)) fail(`approvals must be viewer or any, not '${changes.approvals}'`);
   if (changes.granularity !== undefined && !GRANULARITY.includes(changes.granularity)) fail(`granularity must be xs-s or s-m, not '${changes.granularity}'`);
+  if (changes.visual !== undefined && !VISUAL.includes(changes.visual)) fail(`visual must be on or off, not '${changes.visual}'`);
+  if (changes.reviewers !== undefined && !REVIEWER_COUNTS.includes(changes.reviewers)) fail(`reviewers must be 0, 1 or 2, not '${changes.reviewers}'`);
 }
 
 /**
@@ -636,10 +654,11 @@ function validateSettings(changes) {
  */
 function setSettings(p, changes, { source }) {
   const picked = {};
-  for (const key of ['autonomy', 'approvals', 'granularity']) {
-    if (typeof changes[key] === 'string' && changes[key].trim()) picked[key] = changes[key].trim();
+  for (const key of ['autonomy', 'approvals', 'granularity', 'visual', 'reviewers']) {
+    const value = typeof changes[key] === 'number' ? String(changes[key]) : changes[key];
+    if (typeof value === 'string' && value.trim()) picked[key] = value.trim();
   }
-  if (Object.keys(picked).length === 0) fail('give at least one of autonomy, approvals or granularity');
+  if (Object.keys(picked).length === 0) fail('give at least one of autonomy, approvals, granularity, visual or reviewers');
   validateSettings(picked);
   const { run, state } = loadRun(p);
   const before = settingsOf(run);
@@ -647,8 +666,11 @@ function setSettings(p, changes, { source }) {
   const changed = Object.keys(after).filter(k => after[k] !== before[k]);
   if (changed.length === 0) fail('nothing changed — those are already the settings');
   if (source === 'cli' && before.approvals === 'viewer') {
-    const loosens = after.approvals === 'any' || autonomyLooseness(after.autonomy) > autonomyLooseness(before.autonomy);
-    if (loosens) fail('loosen settings in the viewer — under approvals: viewer the CLI may only make autonomy or approvals stricter. Ask the human to change it there.');
+    const loosens = after.approvals === 'any'
+      || autonomyLooseness(after.autonomy) > autonomyLooseness(before.autonomy)
+      || (after.visual === 'off' && before.visual === 'on')
+      || Number(after.reviewers) < Number(before.reviewers);
+    if (loosens) fail('loosen settings in the viewer — under approvals: viewer the CLI may only make autonomy, approvals or reviews stricter. Ask the human to change it there.');
   }
   Object.assign(run, after);
   if (changed.includes('autonomy')) run.approvalCredit = 0;
@@ -728,7 +750,10 @@ function nextAction(p, state, run) {
         ? `gate 2 for ${active.id}: two blind visual reviewers against the reference`
         : `gate 2 for ${active.id}: theseus.js record ${active.id} visual --skip "<reason>"`;
     }
-    if (s.review !== 'pass') return `gate 3 for ${active.id}: two isolated reviewers`;
+    if (!PASSING.has(s.review)) {
+      const n = codeReviewers(run || loadRun(p).run);
+      return `gate 3 for ${active.id}: ${n === 1 ? 'one isolated reviewer' : 'two isolated reviewers'}`;
+    }
     return `gates passed: theseus.js advance ${active.id}`;
   }
   const next = state.checkpoints.find(c => c.status === 'pending');
@@ -839,6 +864,10 @@ function cmdInit(cwd, { flags }) {
   if (!APPROVALS.includes(approvals)) fail(`--approvals must be viewer or any, not '${approvals}'`);
   const granularity = stringFlag(flags, 'granularity') || DEFAULT_GRANULARITY;
   if (!GRANULARITY.includes(granularity)) fail(`--granularity must be xs-s or s-m, not '${granularity}'`);
+  const visual = stringFlag(flags, 'visual') || 'on';
+  if (!VISUAL.includes(visual)) fail(`--visual must be on or off, not '${visual}'`);
+  const reviewers = stringFlag(flags, 'reviewers') || '2';
+  if (!REVIEWER_COUNTS.includes(reviewers)) fail(`--reviewers must be 0, 1 or 2, not '${reviewers}'`);
   const run = {
     key: requireFlag(flags, 'key', 'a ticket id or a kebab-case slug'),
     reference: requireFlag(flags, 'reference', 'what defines correct: legacy code, a running app, a spec or a mock'),
@@ -847,6 +876,8 @@ function cmdInit(cwd, { flags }) {
     autonomy,
     approvals,
     granularity,
+    visual,
+    reviewers,
     approvalCredit: 0,
     settingsVersion: 0,
     settingsAcked: 0,
@@ -958,6 +989,10 @@ function recordCommandMulti(p, run, cp, gate, flags, fp) {
 }
 
 function recordPanel(p, cp, gate, flags, fp, states) {
+  const { run } = loadRun(p);
+  const required = gate === 'review' ? codeReviewers(run) : REVIEWERS_REQUIRED;
+  if (gate === 'visual' && settingsOf(run).visual === 'off') fail('visual review is off for this run — nothing to record; the gate counts as passed');
+  if (gate === 'review' && required === 0) fail('this run has no code reviewers (reviewers: 0) — nothing to record; the gate counts as passed');
   if (states.tests !== 'pass') fail(`cannot record ${gate}: ${explainGate('gate 1 (tests)', states.tests, cp.id)}`);
   if (gate === 'review' && !PASSING.has(states.visual)) {
     fail(`cannot record review: ${explainGate('gate 2 (visual)', states.visual, cp.id)}`);
@@ -990,6 +1025,10 @@ function recordPanel(p, cp, gate, flags, fp, states) {
   if (flags.findings === undefined || !Number.isInteger(findings) || findings < 0) {
     fail('--findings must be a whole number ≥ 0 — the count of open findings this reviewer reported');
   }
+  const known = Object.keys(evidence.reviewers);
+  if (gate === 'review' && !known.includes(reviewer) && known.length >= required) {
+    fail(`this run uses ${required} code reviewer${required === 1 ? '' : 's'}: ${known.join(', ')} — re-review with the same id${required === 1 ? '' : 's'}`);
+  }
   evidence.reviewers[reviewer] = {
     findings,
     isolation: flags.isolation === 'none' ? 'none' : 'subagent',
@@ -999,15 +1038,15 @@ function recordPanel(p, cp, gate, flags, fp, states) {
   };
   if (gate === 'review') evidence.reviewedTree = reviewTrees(p, cp);
   writeJson(file, evidence);
-  const after = panelState(evidence, fp);
+  const after = panelState(evidence, fp, required);
   const label = gate === 'visual' ? 'gate 2 (visual)' : 'gate 3 (review)';
   log(p, 'gate', { cp: cp.id, gate, reviewer, result: findings ? `${findings} finding(s)` : 'clean', isolation: evidence.reviewers[reviewer].isolation });
   if (after === 'pass') {
-    console.log(`theseus: ${cp.id} ${label} passed — ${REVIEWERS_REQUIRED} distinct reviewers clean at the current code.`);
+    console.log(`theseus: ${cp.id} ${label} passed — ${required} distinct reviewer${required === 1 ? '' : 's'} clean at the current code.`);
   } else if (findings > 0) {
     console.log(`theseus: ${cp.id} ${label} NOT passed — ${reviewer} reported ${findings} finding(s). Fix every one, re-run the gates the fix touched, then review again.`);
   } else {
-    console.log(`theseus: ${cp.id} ${label} — ${reviewer} clean; ${explainGate(label, after, cp.id)}.`);
+    console.log(`theseus: ${cp.id} ${label} — ${reviewer} clean; ${explainGate(label, after, cp.id, required)}.`);
   }
 }
 
@@ -1155,6 +1194,9 @@ function cmdStatus(p, { flags }) {
   }
   const settings = settingsOf(snap.run);
   console.log(`theseus: ${snap.run.key} — autonomy ${settings.autonomy}, approvals ${settings.approvals}, checkpoint size ${settings.granularity}`);
+  if (settings.visual !== 'on' || settings.reviewers !== '2') {
+    console.log(`  reviews: visual ${settings.visual}, code reviewers ${settings.reviewers}`);
+  }
   for (const r of snap.checkpoints) {
     const gates = r.gates ? `  red:${r.gates.red} tests:${r.gates.tests} visual:${r.gates.visual} review:${r.gates.review}` : '';
     console.log(`  ${r.id.padEnd(5)} ${r.status.padEnd(17)} ${r.title}${gates}`);
@@ -1206,7 +1248,7 @@ function cmdDiff(p, { positionals, flags }) {
 }
 
 function cmdConfig(p, { flags }) {
-  const changes = setSettings(p, { autonomy: flags.autonomy, approvals: flags.approvals, granularity: flags.granularity }, { source: 'cli' });
+  const changes = setSettings(p, { autonomy: flags.autonomy, approvals: flags.approvals, granularity: flags.granularity, visual: flags.visual, reviewers: flags.reviewers }, { source: 'cli' });
   const { run } = loadRun(p);
   console.log(`theseus: settings changed — ${describeChanges(changes)}${run.approvals === 'any' ? ' (reported by agent)' : ''}`);
 }

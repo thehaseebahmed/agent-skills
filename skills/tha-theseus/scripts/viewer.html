@@ -98,7 +98,7 @@
   .pills { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
   .pill { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--none-bg); color: var(--none); white-space: nowrap; }
   .s-pass { background: var(--pass-bg); color: var(--pass); }
-  .s-skip, .s-carried, .s-deferred { background: var(--info-bg); color: var(--info); }
+  .s-skip, .s-carried, .s-deferred, .s-off { background: var(--info-bg); color: var(--info); }
   .s-stale, .s-partial, .s-waiting { background: var(--warn-bg); color: var(--warn); }
   .s-fail, .s-findings { background: var(--fail-bg); color: var(--fail); }
 
@@ -221,11 +221,28 @@
         { value: 'any', short: 'viewer or agent', text: 'Viewer or agent', hint: 'The agent may also record an approval you give in chat.' },
       ],
     },
+    visual: {
+      label: 'visual review',
+      fallback: 'on',
+      options: [
+        { value: 'on', short: 'on', text: 'On', hint: 'UI checkpoints are compared with the reference by two blind reviewers.' },
+        { value: 'off', short: 'off', text: 'Off', hint: 'Skip the visual comparison for every checkpoint.' },
+      ],
+    },
+    reviewers: {
+      label: 'code reviewers',
+      fallback: '2',
+      options: [
+        { value: '2', short: '2', text: 'Two reviewers', hint: 'Two independent reviewers; both must be clean.' },
+        { value: '1', short: '1', text: 'One reviewer', hint: 'One reviewer, who must be clean.' },
+        { value: '0', short: 'none', text: 'No code review', hint: 'Skip code review for every checkpoint.' },
+      ],
+    },
   };
   let openMenu = null;
 
   const GATES = [['red', 'Red'], ['tests', 'Tests'], ['visual', 'Visual'], ['review', 'Review']];
-  const LABEL = { pass: 'pass', skip: 'skipped', carried: 'carried', stale: 'stale', fail: 'failed', findings: 'findings', partial: 'partial', none: '—' };
+  const LABEL = { pass: 'pass', skip: 'skipped', carried: 'carried', stale: 'stale', fail: 'failed', findings: 'findings', partial: 'partial', none: '—', off: 'off' };
 
   function ago(iso) {
     if (!iso) return '';
@@ -295,7 +312,7 @@
     $('key').textContent = r.key;
     // Each setting is a chip. Clicking it lists the choices; picking one saves it at once.
     $('chips').innerHTML = Object.entries(SETTINGS).map(([key, def]) => {
-      const current = r[key];
+      const current = r[key] === undefined ? def.fallback : String(r[key]);
       const opened = openMenu === key;
       const choice = def.options.find(o => o.value === current);
       const label = `${def.label}: ${choice ? choice.short : current}`;

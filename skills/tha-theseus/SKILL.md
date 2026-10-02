@@ -1,6 +1,6 @@
 ---
 name: tha-theseus
-description: Build, port, or migrate work one small checkpoint at a time, where no checkpoint may start until the last one has passed four enforced gates — failing-then-passing tests, a visual match against the reference, two independent context-isolated adversarial reviewers, and human approval — with every piece of feedback kept in a learnings file that later checkpoints read. Use when asked to migrate or port a screen, module or app to a new stack, rebuild something while keeping its behaviour identical, build a large feature under strict quality gates, run a Helix-style or checkpoint-and-gate loop, or keep an agent working for hours without its quality drifting. Not for one-off edits or throwaway spikes.
+description: Build, port, or migrate work one small checkpoint at a time, where no checkpoint may start until the last one has passed four enforced gates — failing-then-passing tests, a visual match against the reference, up to two independent context-isolated adversarial reviewers, and human approval — with every piece of feedback kept in a learnings file that later checkpoints read. Use when asked to migrate or port a screen, module or app to a new stack, rebuild something while keeping its behaviour identical, build a large feature under strict quality gates, run a Helix-style or checkpoint-and-gate loop, or keep an agent working for hours without its quality drifting. Not for one-off edits or throwaway spikes.
 ---
 
 # THA Theseus
@@ -20,7 +20,7 @@ each one must pass four gates:
 |---|---|---|
 | 1 Behaviour | it works | the planned tests failed before the code, and pass now |
 | 2 Visual | it looks and behaves like the reference | two blind reviewers find no differences (or `ui: false`, skipped with a reason) |
-| 3 Review | the code underneath is sound | two independent, isolated adversarial reviewers both report zero findings |
+| 3 Review | the code underneath is sound | the run's isolated adversarial reviewers (two by default; one, or off) all report zero findings |
 | 4 Human | a person agrees | approval, at the cadence the autonomy level sets |
 
 A gate written as prose is advice, and agents talk their way past advice. So the gates
@@ -156,7 +156,14 @@ Settle these with the human before anything else:
    gives fewer, larger checkpoints, each a small vertical slice. `xs-s` gives
    Helix-sized tiny ones, which cost more subagent start-ups.
 
-7. **Agents:** run `theseus agents` once per repo, unless the files exist already. It
+7. **Reviews:** which review gates run, and how many code reviewers.
+
+   | Setting | Values | Means |
+   |---|---|---|
+   | `--visual` | `on` (default) / `off` | Whether gate 2 runs. Off skips it for every checkpoint, UI ones included |
+   | `--reviewers` | `2` (default) / `1` / `0` | Exactly how many code reviewers gate 3 deploys; every one must be clean. `0` skips gate 3 |
+
+8. **Agents:** run `theseus agents` once per repo, unless the files exist already. It
    writes lean `theseus-planner`, `theseus-builder` and `theseus-reviewer` agents for
    Claude Code and/or Copilot. Ask whether the human wants specific models:
 
@@ -174,15 +181,16 @@ Settle these with the human before anything else:
      the session's model when the subagent's model costs more (github/copilot-cli#2758).
      Start the session on at least the planner's model.
 
-**Autonomy and approvals can change mid-run.**
+**Autonomy, approvals and reviews can change mid-run.**
 
 - In the viewer, each one is a chip in the header. Clicking it lists the choices in
   plain words ("approve every 3 checkpoints"); picking one saves it.
-- Or the human asks you, and you run `theseus config --autonomy … --approvals …`.
+- Or the human asks you, and you run
+  `theseus config --autonomy … --approvals … --visual … --reviewers …`.
   Checkpoint size changes only this way: `--granularity`.
 
-- Under `approvals: viewer`, the CLI may only make autonomy or approvals *stricter*.
-  Loosening happens in the viewer.
+- Under `approvals: viewer`, the CLI may only make settings *stricter*: more
+  approvals, visual on, more reviewers. Loosening happens in the viewer.
 - When the human changes something, your next `theseus` command starts with a
   `settings changed by …` line. Follow the new settings from that point.
 - A new checkpoint size applies to checkpoints planned from then on.
@@ -252,7 +260,8 @@ For each checkpoint, in order:
 
    The script refuses a passing run unless a failing one came first: a test that has
    never failed has proven nothing. The builder is not given the whole plan.
-5. **Gate 2, visual.**
+5. **Gate 2, visual.** If the run's visual review is `off`, skip this step: the gate
+   counts as passed.
    - **`ui: false`:**
      `theseus record CP1 visual --skip "<why nothing visible changed>"`.
    - **`ui: true`:** follow [gates.md](gates.md#gate-2-visual).
@@ -263,7 +272,10 @@ For each checkpoint, in order:
      4. Record each:
         `theseus record CP1 visual --reviewer look --findings N`.
 6. **Gate 3, adversarial review.**
-   - Dispatch **two separate `theseus-reviewer` subagents**. Each is given only:
+   - If the run has `reviewers: 0`, skip this step: the gate counts as passed.
+   - Otherwise dispatch **exactly as many separate `theseus-reviewer` subagents as
+     the run's `reviewers` setting**, 1 or 2. Never more: the script refuses an extra
+     reviewer id. Each is given only:
      - the output of `theseus diff CP1`
      - the architecture docs
      - the learnings
@@ -332,7 +344,7 @@ Other harnesses rely on the script's refusals alone.
 | "The reviewer's finding is just a nit" | Every finding is fixed or the gate stays shut. If a rule is wrong, change the architecture doc with the human, then re-review. Don't argue it away mid-checkpoint |
 | "I fixed it after the review; it's obviously fine" | The fix is new code nobody has reviewed. The fingerprint check exists because this is the commonest way bad code ships |
 | "The tests pass, so the UI is fine" | Gate 1 proves behaviour. Spacing, states and interaction are gate 2's job, and they drift silently |
-| "One reviewer is enough" | Two independent reviewers fail differently; one misses what the other catches. That is the whole point of the gate |
+| "One reviewer is enough" | Two independent reviewers fail differently; one misses what the other catches. Only the human lowers the count, in the viewer; the CLI can't |
 | "I'll review it myself; I know the code" | You know what you *meant*. The reviewer must not, which is why it gets only the diff and the docs |
 | "These three checkpoints are tiny; I'll do them together" | Then a failure can't be isolated, and an early wrong decision is built on twice. Raise the autonomy level instead, which batches approval, not gates |
 | "The red run is a formality" | A test that never failed may not test anything. Writing the test after the code produces a test of what the code does, not what it should do |
