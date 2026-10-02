@@ -14,6 +14,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const SCRIPT = path.join(__dirname, 'theseus.js');
+const PRE_MULTIREPO = '8bf829e';
 
 function env() {
   const copy = { ...process.env };
@@ -245,8 +246,9 @@ test('a dirty submodule no longer crashes, and changing it makes gates stale', (
 // ── backwards compatibility ──────────────────────────────────────────────────
 
 test('a single-repo run recorded by the previous version carries on unchanged', t => {
-  const committed = spawnSync('git', ['show', 'HEAD:skills/tha-theseus/scripts/theseus.js'], { cwd: __dirname, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-  if (committed.status !== 0) return t.skip('no committed previous version to compare against');
+  // The last version before multi-repo support. CI checks out full history so this exists there.
+  const committed = spawnSync('git', ['show', `${PRE_MULTIREPO}:skills/tha-theseus/scripts/theseus.js`], { cwd: __dirname, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  if (committed.status !== 0) return t.skip(`commit ${PRE_MULTIREPO} is not in this clone's history`);
   const oldScript = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'theseus-old-')), 'theseus.js');
   fs.writeFileSync(oldScript, committed.stdout);
   const old = (dir, ...args) => {
