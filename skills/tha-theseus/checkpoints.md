@@ -1,6 +1,6 @@
 # Planning checkpoints
 
-The brief for the checkpoint planner and test planner subagents. The output is a JSON
+The brief for the `theseus-planner` subagent: it plans the checkpoints and their tests. The output is a JSON
 array that `theseus plan --file` loads.
 
 ## What a checkpoint is
@@ -9,10 +9,10 @@ One small, ordered unit of work, finished and verified before the next begins.
 
 | Property | Rule |
 |---|---|
-| Size | XS or S: one component, one rule, one endpoint. If you can't review it in a few minutes, split it |
+| Size | Set per run, and `theseus plan` prints it. **`s-m`** (default): a small vertical slice, about 2–5 files, reviewable in under ten minutes. **`xs-s`**: one component, one rule, one endpoint, reviewable in a few minutes. Larger than the run's size means split it; much smaller means merge it with its neighbour, since every checkpoint costs a full round of subagents |
 | `done` | Observable: a test outcome or a visible state. Never "implemented" or "refactored" |
 | `ui` | `true` if anything a user sees or touches could change. When in doubt, `true`: a wrong `false` lets a visual regression skip gate 2 |
-| `tests` | The cases that prove `done`: happy path first, then each unhappy path. Plain language; the test writer turns them into code |
+| `tests` | The cases that prove `done`: happy path first, then each unhappy path. Plain language; the builder turns them into code |
 
 ## Ordering: smallest and most foundational first
 
@@ -48,7 +48,7 @@ split.
 
 ## Writing the tests
 
-The test planner fills each checkpoint's `tests`. Every case should drive the
+The planner fills each checkpoint's `tests`. Every case should drive the
 **outermost in-process entry point** a real caller would reach: the route, command,
 tool handler or public function. It asserts only what is observable there:
 

@@ -56,9 +56,9 @@ Its state goes in `.theseus/` in the directory Copilot is working in.
 
 ### Custom agents with their own model
 
-`theseus.js agents` writes `.github/agents/theseus-planner.agent.md` and
-`theseus-reviewer.agent.md`, so planning and review can run on a different model
-from the main session:
+`theseus.js agents` writes `.github/agents/theseus-planner.agent.md`,
+`theseus-builder.agent.md` and `theseus-reviewer.agent.md`. Each has a narrow `tools`
+list, and planning and review can run on a different model from the main session:
 
 ```sh
 node <skill-dir>/scripts/theseus.js agents --target copilot \
@@ -75,3 +75,7 @@ issue tracker. Two open issues there affect this:
 - [github/copilot-cli#2758](https://github.com/github/copilot-cli/issues/2758): the
   CLI silently downgrades a subagent to the session's model when the subagent's
   model costs more. Start the session on at least the model you pinned.
+
+The Claude Code files also set `effort`, `maxTurns` and `omitClaudeMd` to cut each
+subagent's start-up cost. The Copilot files leave those out: Copilot's support for
+them couldn't be verified.

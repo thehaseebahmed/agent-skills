@@ -66,10 +66,26 @@ a missing `node`.
   approve checkpoints. In Claude Code on the web, the link points inside the cloud
   container and is not reachable. Start those runs with `--approvals any` or
   `--autonomy unattended`.
-- **Agents:** `theseus.js agents --target claude --planner-model opus` writes
-  `.claude/agents/theseus-planner.md` and `theseus-reviewer.md`. Subagent `model`
-  accepts `sonnet`, `opus`, `haiku`, `fable`, a full model ID, or `inherit`, as
-  documented at
-  [code.claude.com/docs/en/sub-agents](https://code.claude.com/docs/en/sub-agents)
-  (checked October 2026). With no model flag, the line is left out and the agent
-  inherits the session's model.
+- **Agents:** `theseus.js agents --target claude` writes
+  `.claude/agents/theseus-planner.md`, `theseus-builder.md` and
+  `theseus-reviewer.md`. These are lean by default, to cut the start-up cost of each
+  subagent.
+
+  | Agent | tools | effort | maxTurns | omitClaudeMd |
+  |---|---|---|---|---|
+  | planner | Read, Grep, Glob | medium | 40 | true |
+  | builder | Read, Edit, Write, Bash, Grep, Glob | session's | 80 | — (keeps project rules) |
+  | reviewer | Read, Grep, Glob | medium | 30 | true (blind to project rules by design) |
+
+  - **Overrides:** `--<role>-model`, `--<role>-effort` (`inherit` drops the line) and
+    `--<role>-max-turns`.
+  - **`model`** accepts `sonnet`, `opus`, `haiku`, `fable`, a full model ID, or
+    `inherit`. All of these fields are documented at
+    [code.claude.com/docs/en/sub-agents](https://code.claude.com/docs/en/sub-agents)
+    (checked October 2026).
+  - **`omitClaudeMd`** needs Claude Code v2.1.271 or later, per that page. On older
+    versions, expect the field to be ignored and the agent to load CLAUDE.md as
+    before.
+- **Settings mid-run:** autonomy, approvals and checkpoint size can be changed in the
+  viewer's Settings panel at any time. The agent sees a `settings changed` line on
+  its next command.

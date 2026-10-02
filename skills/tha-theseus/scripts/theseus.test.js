@@ -283,7 +283,7 @@ test('added checkpoints need approval and pass through every gate', () => {
     { title: 'Tighten the error copy', done: 'error names the field', ui: false, tests: ['error mentions days'] },
   ]);
   assert.match(ok(dir, 'add', '--file', extra).out, /added CP3/);
-  const status = JSON.parse(ok(dir, 'status', '--json').out);
+  const status = JSON.parse(ok(dir, 'status', '--json', '--full').out);
   assert.strictEqual(status.checkpoints[2].origin, 'feedback');
   assert.strictEqual(status.checkpoints[2].approved, false);
   refused(dir, /CP3 has not been approved by a human/, 'begin', 'CP3');
@@ -406,7 +406,7 @@ test('agents writes Claude and Copilot files with a single-string model and the 
   assert.match(out, /wrote \.claude\/agents\/theseus-planner\.md \(model "opus"\)/);
   const claude = fs.readFileSync(path.join(dir, '.claude', 'agents', 'theseus-planner.md'), 'utf8');
   const copilot = fs.readFileSync(path.join(dir, '.github', 'agents', 'theseus-planner.agent.md'), 'utf8');
-  assert.match(claude, /^---\nname: theseus-planner\ndescription: ".+"\ntools: Read, Grep, Glob\nmodel: "opus"\n---\n/);
+  assert.match(claude, /^---\nname: theseus-planner\ndescription: ".+"\ntools: Read, Grep, Glob\nmodel: "opus"\neffort: medium\nmaxTurns: 40\nomitClaudeMd: true\n---\n/);
   assert.match(copilot, /^---\nname: theseus-planner\ndescription: ".+"\ntools: \['read', 'search'\]\nmodel: "Claude Opus 4\.5 \(copilot\)"\n---\n/);
   assert.match(claude, /## Writing the tests/, 'planner body is the checkpoints.md brief');
   const seams = path.resolve(__dirname, '..', '..', '..', 'references', 'seams.md');
@@ -432,4 +432,168 @@ test('agents refuses to overwrite an agent file it did not generate', () => {
   assert.ok(!fs.existsSync(path.join(dir, '.claude', 'agents', 'theseus-planner.md')), 'nothing written on refusal');
   ok(dir, 'agents', '--target', 'claude');
   ok(dir, 'agents', '--target', 'claude', '--planner-model', 'haiku');
+});
+
+// ── lean agents ──────────────────────────────────────────────────────────────
+
+test('agents writes planner, builder and reviewer for each tool, with lean Claude-only fields', () => {
+  const dir = makeRepo();
+  const out = ok(dir, 'agents').out;
+  for (const f of ['.claude/agents/theseus-planner.md', '.claude/agents/theseus-builder.md', '.claude/agents/theseus-reviewer.md',
+    '.github/agents/theseus-planner.agent.md', '.github/agents/theseus-builder.agent.md', '.github/agents/theseus-reviewer.agent.md']) {
+    assert.match(out, new RegExp(`wrote ${f.replace(/\./g, '\\.')}`));
+  }
+  const read = f => fs.readFileSync(path.join(dir, f), 'utf8');
+  const reviewer = read('.claude/agents/theseus-reviewer.md');
+  assert.match(reviewer, /\ntools: Read, Grep, Glob\neffort: medium\nmaxTurns: 30\nomitClaudeMd: true\n/);
+  const builder = read('.claude/agents/theseus-builder.md');
+  assert.match(builder, /\ntools: Read, Edit, Write, Bash, Grep, Glob\nmaxTurns: 80\n---/);
+  assert.doesNotMatch(builder, /omitClaudeMd|effort:/, 'the builder keeps project rules and the session effort');
+  assert.match(builder, /# Builder brief/);
+  for (const role of ['planner', 'builder', 'reviewer']) {
+    assert.doesNotMatch(read(`.github/agents/theseus-${role}.agent.md`), /^(effort|maxTurns|omitClaudeMd):/m, `copilot ${role} has no Claude-only fields`);
+  }
+  assert.match(read('.github/agents/theseus-builder.agent.md'), /\ntools: \['read', 'edit', 'search', 'execute'\]\n/);
+});
+
+test('agents flags override effort and max turns, and inherit drops effort', () => {
+  const dir = makeRepo();
+  ok(dir, 'agents', '--target', 'claude', '--reviewer-effort', 'low', '--reviewer-max-turns', '12', '--planner-effort', 'inherit');
+  assert.match(fs.readFileSync(path.join(dir, '.claude/agents/theseus-reviewer.md'), 'utf8'), /\neffort: low\nmaxTurns: 12\n/);
+  assert.doesNotMatch(fs.readFileSync(path.join(dir, '.claude/agents/theseus-planner.md'), 'utf8'), /^effort:/m);
+  refused(dir, /--reviewer-effort must be one of low, medium, high, xhigh, max or inherit, not 'huge'/, 'agents', '--reviewer-effort', 'huge');
+  refused(dir, /--builder-max-turns must be a whole number ≥ 1, not '0'/, 'agents', '--builder-max-turns', '0');
+});
+
+// ── settings mid-run ─────────────────────────────────────────────────────────
+
+function viewerRun(extra = []) {
+  const dir = makeRepo();
+  ok(dir, 'init', '--key', 'HR-7', '--reference', 'r', '--test-cmd', 'node check.js', ...extra);
+  return dir;
+}
+
+test('init records the checkpoint size, defaulting to s-m', () => {
+  assert.match(ok(viewerRun(), 'status').out, /autonomy step, approvals viewer, checkpoint size s-m/);
+  assert.match(ok(viewerRun(['--granularity', 'xs-s']), 'status').out, /checkpoint size xs-s/);
+  refused(makeRepo(), /--granularity must be xs-s or s-m, not 'huge'/, 'init', '--key', 'K', '--reference', 'r', '--test-cmd', 'c', '--granularity', 'huge');
+});
+
+test('under approvals viewer the CLI may tighten but not loosen', () => {
+  const dir = viewerRun(['--autonomy', 'batch:3']);
+  assert.match(ok(dir, 'config', '--autonomy', 'step').out, /settings changed — autonomy batch:3 → step/);
+  refused(dir, /loosen settings in the viewer/, 'config', '--autonomy', 'unattended');
+  refused(dir, /loosen settings in the viewer/, 'config', '--autonomy', 'batch:2');
+  refused(dir, /loosen settings in the viewer/, 'config', '--approvals', 'any');
+  assert.match(ok(dir, 'config', '--granularity', 'xs-s').out, /granularity s-m → xs-s/);
+  refused(dir, /nothing changed — those are already the settings/, 'config', '--granularity', 'xs-s');
+  refused(dir, /autonomy must be step, batch:N or unattended, not 'sometimes'/, 'config', '--autonomy', 'sometimes');
+});
+
+test('under approvals any the CLI may loosen, and the change is logged as the agent', () => {
+  const dir = viewerRun(['--approvals', 'any']);
+  assert.match(ok(dir, 'config', '--autonomy', 'unattended').out, /autonomy step → unattended \(reported by agent\)/);
+  const full = JSON.parse(ok(dir, 'status', '--json', '--full').out);
+  const e = full.log.find(x => x.event === 'settings-changed');
+  assert.deepStrictEqual([e.source, e.by], ['cli', 'agent (cli)']);
+});
+
+test('a change made in the viewer is announced once on the next CLI command', () => {
+  const dir = viewerRun();
+  const core = require('./theseus');
+  core.setSettings(core.resolvePaths(dir), { autonomy: 'unattended' }, { source: 'viewer' });
+  assert.match(ok(dir, 'status').out, /^theseus: settings changed by human \(viewer\): autonomy step → unattended\. Follow them from now on\./);
+  assert.doesNotMatch(ok(dir, 'status').out, /settings changed/);
+});
+
+test('a checkpoint waiting for approval advances once the human switches to unattended', () => {
+  const dir = makeRepo();
+  ok(dir, 'init', '--key', 'HR-7', '--reference', 'r', '--test-cmd', 'node check.js');
+  ok(dir, 'plan', '--file', writeJsonFile(os.tmpdir(), `cps-${process.pid}.json`, CHECKPOINTS));
+  const core = require('./theseus');
+  const p = core.resolvePaths(dir);
+  core.approvePlan(p, { by: 'human (viewer)', source: 'viewer' });
+  ok(dir, 'begin', 'CP1');
+  passGates(dir);
+  refused(dir, /waiting for human approval/, 'advance', 'CP1');
+  core.setSettings(p, { autonomy: 'unattended' }, { source: 'viewer' });
+  const status = ok(dir, 'status').out;
+  assert.match(status, /next: autonomy no longer needs a human here: theseus\.js advance CP1/);
+  assert.match(ok(dir, 'advance', 'CP1').out, /CP1 done \(approval deferred to PR review\)/);
+});
+
+test('wait wakes on a settings change and says what to do', async () => {
+  const dir = started();
+  passGates(dir);
+  refused(dir, /waiting for human approval/, 'advance', 'CP1');
+  const waiting = spawn(process.execPath, [SCRIPT, 'wait', '--timeout', '20'], { cwd: dir, env: env() });
+  let out = '';
+  waiting.stdout.on('data', chunk => { out += chunk; });
+  await new Promise(resolve => setTimeout(resolve, 700));
+  const core = require('./theseus');
+  core.setSettings(core.resolvePaths(dir), { autonomy: 'unattended' }, { source: 'viewer' });
+  assert.strictEqual(await new Promise(resolve => waiting.on('exit', resolve)), 0);
+  assert.match(out, /settings changed by human \(viewer\): autonomy step → unattended/);
+  assert.match(out, /next: autonomy no longer needs a human here: theseus\.js advance CP1/);
+});
+
+test('changing autonomy resets batch credit', () => {
+  const dir = started('batch:3');
+  passGates(dir);
+  ok(dir, 'advance', 'CP1', '--approved-by', 'h');
+  assert.strictEqual(JSON.parse(ok(dir, 'status', '--json').out).run.approvalCredit, 2);
+  ok(dir, 'config', '--autonomy', 'batch:5');
+  assert.strictEqual(JSON.parse(ok(dir, 'status', '--json').out).run.approvalCredit, 0);
+});
+
+// ── slimmer output ───────────────────────────────────────────────────────────
+
+test('every command ends with a next line', () => {
+  const dir = started();
+  assert.match(ok(dir, 'record', 'CP1', 'red').out, /\nnext: make the tests pass: theseus\.js record CP1 tests\n$/);
+});
+
+test('status --json leaves out the log and evidence unless --full', () => {
+  const dir = started();
+  passGates(dir);
+  const slim = JSON.parse(ok(dir, 'status', '--json').out);
+  assert.strictEqual(slim.log, undefined);
+  assert.strictEqual(slim.checkpoints[0].evidence, undefined);
+  assert.deepStrictEqual(slim.checkpoints[0].gates, { red: 'pass', tests: 'pass', visual: 'skip', review: 'pass' });
+  const full = JSON.parse(ok(dir, 'status', '--json', '--full').out);
+  assert.ok(full.log.length > 0);
+  assert.ok(full.checkpoints[0].evidence.tests.tail !== undefined);
+});
+
+test('diff shows the checkpoint, untracked files included, without the state dir', () => {
+  const dir = started();
+  ok(dir, 'record', 'CP1', 'red');
+  fs.writeFileSync(path.join(dir, 'impl.txt'), 'first\n');
+  const out = ok(dir, 'diff', 'CP1').out;
+  assert.match(out, /diff --git a\/impl\.txt b\/impl\.txt/);
+  assert.match(out, /\+first/);
+  assert.doesNotMatch(out, /\.theseus/);
+  assert.doesNotMatch(out, /^next:/m, 'diff output is handed to reviewers verbatim');
+});
+
+test('diff --since-review shows only what changed after the last review', () => {
+  const dir = started();
+  refused(dir, /no review recorded yet for CP1/, 'diff', 'CP1', '--since-review');
+  passGates(dir);
+  assert.match(ok(dir, 'diff', 'CP1', '--since-review').out, /^\(no changes since the last review\)/);
+  fs.writeFileSync(path.join(dir, 'fix.txt'), 'the fix\n');
+  const out = ok(dir, 'diff', 'CP1', '--since-review').out;
+  assert.match(out, /b\/fix\.txt/);
+  assert.doesNotMatch(out, /impl\.txt/);
+  assert.strictEqual(spawnSync('git', ['status', '--porcelain', '--', 'fix.txt'], { cwd: dir, encoding: 'utf8' }).stdout, '?? fix.txt\n', 'the real index is untouched');
+});
+
+test('learn drops duplicates and --replace swaps in a compacted list', () => {
+  const dir = started();
+  ok(dir, 'learn', '--source', 'reviewer', 'Inject the clock');
+  assert.match(ok(dir, 'learn', '--source', 'reviewer', '  inject   the clock ').out, /already learned/);
+  ok(dir, 'learn', 'one more rule');
+  const merged = writeJsonFile(os.tmpdir(), `merged-${process.pid}.json`, ['inject the clock; no Date.now in handlers']);
+  assert.match(ok(dir, 'learn', '--replace', merged).out, /learnings compacted — 2 → 1/);
+  assert.strictEqual(ok(dir, 'learnings').out, '- inject the clock; no Date.now in handlers\n');
 });

@@ -18,7 +18,7 @@ const http = require('node:http');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
-const { GateError, snapshot, approvePlan, advance, addFeedback, doneMessage, IMAGE_TYPES } = require('./theseus');
+const { GateError, snapshot, approvePlan, advance, addFeedback, setSettings, doneMessage, IMAGE_TYPES } = require('./theseus');
 
 const PAGE = path.join(__dirname, 'viewer.html');
 const TICK_MS = 1000;
@@ -131,6 +131,12 @@ function startServer(p, { port = 0, token = crypto.randomBytes(16).toString('hex
         const result = advance(p, approve[1], { by: 'human (viewer)', source: 'viewer' });
         broadcast(true);
         return send(res, 200, { ok: true, message: doneMessage(result).replace(/^theseus: /, '') });
+      }
+      if (req.method === 'POST' && route === '/api/settings') {
+        const body = await readBody(req);
+        const changes = setSettings(p, body, { source: 'viewer' });
+        broadcast(true);
+        return send(res, 200, { ok: true, message: `Settings saved: ${changes.map(c => `${c.key} ${c.from} → ${c.to}`).join(', ')}. The agent picks them up on its next step.` });
       }
       if (req.method === 'POST' && route === '/api/feedback') {
         const body = await readBody(req);

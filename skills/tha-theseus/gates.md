@@ -12,7 +12,7 @@ ignores the state directory.
 
 ## Red (before gate 1)
 
-- The test writer writes the checkpoint's planned tests. No implementation yet.
+- The builder writes the checkpoint's planned tests. No implementation yet.
 - `theseus record CP red [--cmd "<narrower command>"]` runs the command, and
   **requires a non-zero exit** (enforced).
 - A failure caused by a syntax error is not a red run. Read the recorded tail and make
@@ -91,13 +91,16 @@ reviewers still work.
 
 ### When there are findings
 
-1. A fresh **fixer** subagent gets the findings, the diff and the learnings, and
-   fixes all of them. Not the builder: a context that wrote the code tends to defend
-   it.
+1. A fresh `theseus-builder` in **fix mode** gets the findings, the diff and the
+   learnings, and fixes all of them. It must be a new spawn, not the one that built
+   the checkpoint: a context that wrote the code tends to defend it.
 2. Re-run gate 1: `record CP tests`. The fix changed the fingerprint, so this is
    enforced.
 3. Re-run gate 2, or `--carry` it with a reason.
-4. Dispatch **both** reviewers again, fresh, on the new diff.
+4. Dispatch **both** reviewers again, fresh. Each gets its own previous findings and
+   `theseus diff CP --since-review`: only what changed since the last review. A full
+   diff is cheaper to skip and adds nothing the first round didn't see. The gate rule
+   doesn't change: both must be clean at the current code.
 5. Repeat until both are clean.
 
 If a reviewer and the human disagree about a rule, the human decides. Update the

@@ -113,7 +113,7 @@ test('approving the plan in the viewer records it as the viewer', () =>
     const res = await api('/api/approve-plan', { method: 'POST' });
     assert.strictEqual(res.status, 200);
     assert.strictEqual((await res.json()).message, 'Approved CP1, CP2.');
-    const snap = JSON.parse(ok(dir, 'status', '--json').out);
+    const snap = JSON.parse(ok(dir, 'status', '--json', '--full').out);
     assert.deepStrictEqual(snap.checkpoints[0].plannedBy, { by: 'human (viewer)', source: 'viewer' });
     const again = await api('/api/approve-plan', { method: 'POST' });
     assert.strictEqual(again.status, 409);
@@ -215,3 +215,16 @@ test('serve starts a background viewer, reuses it, and stop ends it', async () =
   await assert.rejects(fetch(url[1]));
   assert.match(ok(dir, 'stop').out, /no viewer running/);
 });
+
+test('the viewer can change any setting, and bad values are refused', () =>
+  withServer(async ({ dir, server, api }) => {
+    const res = await api('/api/settings', { method: 'POST', body: JSON.stringify({ autonomy: 'unattended', approvals: 'viewer', granularity: 'xs-s' }) });
+    assert.strictEqual(res.status, 200);
+    assert.match((await res.json()).message, /Settings saved: autonomy step → unattended, granularity s-m → xs-s\. The agent picks them up on its next step\./);
+    assert.match(ok(dir, 'status').out, /settings changed by human \(viewer\): autonomy step → unattended, granularity s-m → xs-s/);
+    const bad = await api('/api/settings', { method: 'POST', body: JSON.stringify({ autonomy: 'batch:0' }) });
+    assert.strictEqual(bad.status, 409);
+    assert.match((await bad.json()).error, /autonomy must be step, batch:N or unattended, not 'batch:0'/);
+    const anon = await fetch(`http://127.0.0.1:${server.port}/api/settings`, { method: 'POST', body: '{"autonomy":"step"}' });
+    assert.strictEqual(anon.status, 401);
+  }));

@@ -35,12 +35,19 @@ const LOG_LIMIT = 200;
 const DEFAULT_PORT = 4747;
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const AUTONOMY = /^(step|unattended|batch:[1-9]\d*)$/;
+const APPROVALS = ['viewer', 'any'];
+const GRANULARITY = ['xs-s', 's-m'];
+const DEFAULT_GRANULARITY = 's-m';
+const LEARNINGS_COMPACT_AT = 40;
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const IMAGE_TYPES = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif' };
 
 const USAGE = `usage: theseus.js <command> [args]
 
   init --key K --reference R --test-cmd C [--arch a.md,b.md]
-       [--autonomy step|batch:N|unattended] [--approvals viewer|any]
+       [--autonomy step|batch:N|unattended] [--approvals viewer|any] [--granularity xs-s|s-m]
+  config [--autonomy …] [--approvals …] [--granularity …]
+                                      change settings mid-run (the CLI may only tighten under --approvals viewer)
   serve [--port ${DEFAULT_PORT}]            start the live viewer in the background; prints its link
   stop                                stop the viewer
   plan --file checkpoints.json        load the checkpoint list (replaces an unstarted plan)
@@ -54,14 +61,16 @@ const USAGE = `usage: theseus.js <command> [args]
   record CP visual --carry "reason"   re-use an earlier visual pass after a non-visual fix
   record CP review --reviewer ID --findings N [--isolation none] [--note T]
   advance CP [--approved-by NAME]     gate 4 and mark done (--approved-by refused when --approvals viewer)
+  diff CP [--since-review]            the checkpoint's diff for reviewers (or only what changed since the last review)
   wait [--timeout 540]                block until the human approves or sends feedback in the viewer
   inbox                               print unread feedback from the viewer and mark it read
   learn --cp CP --source reviewer|human|other "one-line rule"
+  learn --replace merged.json         replace all learnings with a compacted list
   learnings                           print the learnings, one per line, for subagent briefs
-  agents [--target claude,copilot] [--planner-model M] [--planner-model-copilot M]
-         [--reviewer-model M] [--reviewer-model-copilot M]
-                                      write custom agent files that pin a model
-  status [--json]
+  agents [--target claude,copilot] [--<role>-model M] [--<role>-model-copilot M]
+         [--<role>-effort low|medium|high|xhigh|max|inherit] [--<role>-max-turns N]
+                                      write lean planner/builder/reviewer agents (role: planner, builder, reviewer)
+  status [--json [--full]]
   check                               for a Stop hook: exit 2 while gates are open
   archive                             move a finished run to .theseus/archive/<key>/`;
 
@@ -108,8 +117,8 @@ function stringFlag(flags, name) {
 
 // ── git and paths ────────────────────────────────────────────────────────────
 
-function git(root, args) {
-  const result = spawnSync('git', args, { cwd: root, encoding: 'buffer', maxBuffer: 512 * 1024 * 1024 });
+function git(root, args, env) {
+  const result = spawnSync('git', args, { cwd: root, encoding: 'buffer', maxBuffer: 512 * 1024 * 1024, env: env ? { ...process.env, ...env } : process.env });
   if (result.status !== 0) {
     fail(`git ${args.join(' ')} failed: ${String(result.stderr || '').trim()}`);
   }
@@ -214,6 +223,22 @@ function assertClean(p) {
   const out = git(p.root, ['status', '--porcelain', '--', ...pathspec(p)]).toString('utf8').trim();
   if (out) {
     fail(`the working tree has uncommitted changes — commit the previous checkpoint (or stash) before beginning another:\n${out}`);
+  }
+}
+
+/**
+ * Write the working tree (tracked and untracked, minus our state) as a git
+ * tree object, using a throwaway index so the user's staging area is untouched.
+ */
+function snapshotTree(p, baseRef) {
+  const index = path.join(p.base, `index.${process.pid}.tmp`);
+  const env = { GIT_INDEX_FILE: index };
+  try {
+    git(p.root, ['read-tree', baseRef], env);
+    git(p.root, ['add', '-A', '--', ...pathspec(p)], env);
+    return git(p.root, ['write-tree'], env).toString('utf8').trim();
+  } finally {
+    fs.rmSync(index, { force: true });
   }
 }
 
@@ -456,6 +481,73 @@ function advance(p, cpId, { by = null, source = 'cli' } = {}) {
   return { done: true, cp, approval, next };
 }
 
+function settingsOf(run) {
+  return { autonomy: run.autonomy, approvals: run.approvals, granularity: run.granularity || DEFAULT_GRANULARITY };
+}
+
+/** step is strictest; a larger batch is looser; unattended is loosest. */
+function autonomyLooseness(autonomy) {
+  if (autonomy === 'step') return 1;
+  if (autonomy === 'unattended') return Infinity;
+  return Number(autonomy.slice(6));
+}
+
+function validateSettings(changes) {
+  if (changes.autonomy !== undefined && !AUTONOMY.test(changes.autonomy)) fail(`autonomy must be step, batch:N or unattended, not '${changes.autonomy}'`);
+  if (changes.approvals !== undefined && !APPROVALS.includes(changes.approvals)) fail(`approvals must be viewer or any, not '${changes.approvals}'`);
+  if (changes.granularity !== undefined && !GRANULARITY.includes(changes.granularity)) fail(`granularity must be xs-s or s-m, not '${changes.granularity}'`);
+}
+
+/**
+ * Change settings mid-run. The human (viewer) may change anything. Under
+ * `approvals: viewer` the CLI may only tighten, so an agent cannot relax the
+ * rules it is being held to.
+ */
+function setSettings(p, changes, { source }) {
+  const picked = {};
+  for (const key of ['autonomy', 'approvals', 'granularity']) {
+    if (typeof changes[key] === 'string' && changes[key].trim()) picked[key] = changes[key].trim();
+  }
+  if (Object.keys(picked).length === 0) fail('give at least one of autonomy, approvals or granularity');
+  validateSettings(picked);
+  const { run, state } = loadRun(p);
+  const before = settingsOf(run);
+  const after = { ...before, ...picked };
+  const changed = Object.keys(after).filter(k => after[k] !== before[k]);
+  if (changed.length === 0) fail('nothing changed — those are already the settings');
+  if (source === 'cli' && before.approvals === 'viewer') {
+    const loosens = after.approvals === 'any' || autonomyLooseness(after.autonomy) > autonomyLooseness(before.autonomy);
+    if (loosens) fail('loosen settings in the viewer — under approvals: viewer the CLI may only make autonomy or approvals stricter. Ask the human to change it there.');
+  }
+  Object.assign(run, after);
+  if (changed.includes('autonomy')) run.approvalCredit = 0;
+  run.settingsVersion = (run.settingsVersion || 0) + 1;
+  // The agent already knows about a change it made itself.
+  if (source === 'cli') run.settingsAcked = run.settingsVersion;
+  save(p, run, state);
+  const diff = changed.map(key => ({ key, from: before[key], to: after[key] }));
+  log(p, 'settings-changed', { source, by: source === 'viewer' ? 'human (viewer)' : 'agent (cli)', version: run.settingsVersion, changes: diff });
+  return diff;
+}
+
+function describeChanges(changes) {
+  return changes.map(c => `${c.key} ${c.from} → ${c.to}`).join(', ');
+}
+
+/** Tell the agent, once, about settings the human changed since it last looked. */
+function announceSettings(p) {
+  if (!fs.existsSync(p.runFile)) return;
+  const run = readJson(p.runFile);
+  if ((run.settingsVersion || 0) === (run.settingsAcked || 0)) return;
+  for (const e of readLog(p)) {
+    if (e.event === 'settings-changed' && e.version > (run.settingsAcked || 0)) {
+      console.log(`theseus: settings changed by ${e.by}: ${describeChanges(e.changes)}. Follow them from now on.`);
+    }
+  }
+  run.settingsAcked = run.settingsVersion;
+  writeJson(p.runFile, run);
+}
+
 function readFeedback(p) {
   return readJson(p.feedback, { items: [] });
 }
@@ -492,6 +584,9 @@ function nextAction(p, state, run) {
   const active = state.checkpoints.find(isActive);
   if (active) {
     if (active.status === 'awaiting-approval') {
+      if (run && (run.autonomy === 'unattended' || (run.autonomy.startsWith('batch:') && run.approvalCredit > 0))) {
+        return `autonomy no longer needs a human here: theseus.js advance ${active.id}`;
+      }
       return viewer ? `human approves ${active.id} in the viewer; agent runs: theseus.js wait` : `get human approval: theseus.js advance ${active.id} --approved-by NAME`;
     }
     const s = gateStates(p, active, fingerprint(p, active.base));
@@ -545,6 +640,29 @@ function snapshot(p) {
   };
 }
 
+/** What an agent needs from `status --json`: no log, no test output, no evidence bodies. */
+function summary(snap) {
+  return {
+    run: { key: snap.run.key, ...settingsOf(snap.run), approvalCredit: snap.run.approvalCredit },
+    checkpoints: snap.checkpoints.map(c => ({
+      id: c.id,
+      title: c.title,
+      status: c.status,
+      ui: c.ui,
+      approved: c.approved,
+      done: c.done,
+      tests: c.tests,
+      gates: c.gates,
+      approval: c.approval,
+      isolationNone: c.isolationNone,
+    })),
+    next: snap.next,
+    learnings: snap.learnings.length,
+    unreadFeedback: snap.feedback.filter(f => !f.read).length,
+    warnings: snap.warnings,
+  };
+}
+
 // ── commands ─────────────────────────────────────────────────────────────────
 
 function cmdInit(cwd, { flags }) {
@@ -556,7 +674,9 @@ function cmdInit(cwd, { flags }) {
   const autonomy = stringFlag(flags, 'autonomy') || 'step';
   if (!AUTONOMY.test(autonomy)) fail(`--autonomy must be step, batch:N or unattended, not '${autonomy}'`);
   const approvals = stringFlag(flags, 'approvals') || 'viewer';
-  if (!['viewer', 'any'].includes(approvals)) fail(`--approvals must be viewer or any, not '${approvals}'`);
+  if (!APPROVALS.includes(approvals)) fail(`--approvals must be viewer or any, not '${approvals}'`);
+  const granularity = stringFlag(flags, 'granularity') || DEFAULT_GRANULARITY;
+  if (!GRANULARITY.includes(granularity)) fail(`--granularity must be xs-s or s-m, not '${granularity}'`);
   const run = {
     key: requireFlag(flags, 'key', 'a ticket id or a kebab-case slug'),
     reference: requireFlag(flags, 'reference', 'what defines correct: legacy code, a running app, a spec or a mock'),
@@ -564,15 +684,18 @@ function cmdInit(cwd, { flags }) {
     arch: stringFlag(flags, 'arch') ? flags.arch.split(',').map(s => s.trim()).filter(Boolean) : [],
     autonomy,
     approvals,
+    granularity,
     approvalCredit: 0,
+    settingsVersion: 0,
+    settingsAcked: 0,
     created: new Date().toISOString(),
   };
   fs.mkdirSync(p.base, { recursive: true });
   const ignore = path.join(p.base, '.gitignore');
   if (!fs.existsSync(ignore)) fs.writeFileSync(ignore, 'server.json\nserver.log\n*.tmp\n');
   save(p, run, { checkpoints: [] });
-  log(p, 'init', { key: run.key, autonomy, approvals });
-  console.log(`theseus: run '${run.key}' started in ${path.relative(cwd, p.base) || p.base} (autonomy: ${autonomy}, approvals: ${approvals})`);
+  log(p, 'init', { key: run.key, autonomy, approvals, granularity });
+  console.log(`theseus: run '${run.key}' started in ${path.relative(cwd, p.base) || p.base} (autonomy: ${autonomy}, approvals: ${approvals}, checkpoint size: ${granularity})`);
   console.log('theseus: start the viewer and give the human its link: theseus.js serve');
 }
 
@@ -584,7 +707,7 @@ function cmdPlan(p, { flags }) {
   state.checkpoints = normalizeCheckpoints(readJson(requireFlag(flags, 'file')), 0, 'plan');
   save(p, run, state);
   log(p, 'planned', { count: state.checkpoints.length });
-  console.log(`theseus: ${state.checkpoints.length} checkpoint(s) planned — the human reviews and approves them in the viewer`);
+  console.log(`theseus: ${state.checkpoints.length} checkpoint(s) planned at size ${settingsOf(run).granularity} — the human reviews and approves them in the viewer`);
 }
 
 function cmdAdd(p, { flags }) {
@@ -593,7 +716,7 @@ function cmdAdd(p, { flags }) {
   state.checkpoints.push(...added);
   save(p, run, state);
   log(p, 'added', { cps: added.map(c => c.id) });
-  console.log(`theseus: added ${added.map(c => c.id).join(', ')} — they need human approval before they begin`);
+  console.log(`theseus: added ${added.map(c => c.id).join(', ')} at size ${settingsOf(run).granularity} — they need human approval before they begin`);
 }
 
 function cmdApprovePlan(p, { flags }) {
@@ -681,6 +804,7 @@ function recordPanel(p, cp, gate, flags, fp, states) {
     fp,
     at,
   };
+  if (gate === 'review') evidence.reviewedTree = snapshotTree(p, cp.base);
   writeJson(file, evidence);
   const after = panelState(evidence, fp);
   const label = gate === 'visual' ? 'gate 2 (visual)' : 'gate 3 (review)';
@@ -740,11 +864,30 @@ function doneMessage({ cp, approval, next }) {
 }
 
 function cmdLearn(p, { positionals, flags }) {
+  if (flags.replace !== undefined) {
+    const input = readJson(requireFlag(flags, 'replace', 'a JSON array of rules (strings, or { text, cp, source })'));
+    if (!Array.isArray(input) || input.length === 0) fail('--replace needs a non-empty JSON array of rules');
+    const before = readLearnings(p).length;
+    const today = new Date().toISOString().slice(0, 10);
+    const merged = input.map(item => (typeof item === 'string' ? { text: item } : item))
+      .filter(item => item && typeof item.text === 'string' && item.text.trim())
+      .map(item => ({ text: item.text.trim(), cp: item.cp || null, source: item.source || 'other', date: item.date || today }));
+    if (merged.length === 0) fail('--replace found no rules with text');
+    writeJson(p.learnings, merged);
+    if (fs.existsSync(p.runFile)) log(p, 'learnings-replaced', { from: before, to: merged.length });
+    console.log(`theseus: learnings compacted — ${before} → ${merged.length}`);
+    return;
+  }
   const text = positionals.join(' ').trim();
   if (!text) fail('give the rule as one line of text, e.g. theseus.js learn --cp CP3 --source reviewer "inject the clock; never call Date.now in handlers"');
   const source = stringFlag(flags, 'source') || 'other';
   if (!['reviewer', 'human', 'other'].includes(source)) fail(`--source must be reviewer, human or other, not '${source}'`);
   const learnings = readLearnings(p);
+  const key = t => t.toLowerCase().replace(/\s+/g, ' ').trim();
+  if (learnings.some(l => key(l.text) === key(text))) {
+    console.log(`theseus: already learned — ${text}`);
+    return;
+  }
   learnings.push({ text, cp: stringFlag(flags, 'cp'), source, date: new Date().toISOString().slice(0, 10) });
   writeJson(p.learnings, learnings);
   if (fs.existsSync(p.runFile)) log(p, 'learned', { cp: stringFlag(flags, 'cp'), text });
@@ -758,6 +901,10 @@ function cmdLearnings(p) {
     return;
   }
   for (const l of learnings) console.log(`- ${l.text}`);
+  // On stderr, so the list on stdout can be pasted into a brief as it is.
+  if (learnings.length > LEARNINGS_COMPACT_AT) {
+    console.error(`theseus: ${learnings.length} learnings — merge overlapping ones and run: theseus.js learn --replace merged.json`);
+  }
 }
 
 function cmdInbox(p) {
@@ -785,14 +932,16 @@ async function cmdWait(p, { flags }) {
   if (!Number.isFinite(timeout) || timeout <= 0) fail('--timeout must be a positive number of seconds');
   const seen = readLog(p).length;
   const deadline = Date.now() + timeout * 1000;
-  const human = new Set(['plan-approved', 'approved', 'feedback', 'changes-requested']);
+  const human = new Set(['plan-approved', 'approved', 'feedback', 'changes-requested', 'settings-changed']);
   while (Date.now() < deadline) {
     const fresh = readLog(p).slice(seen).filter(e => human.has(e.event) && e.source !== 'cli');
     if (fresh.length) {
       for (const e of fresh) {
+        if (e.event === 'settings-changed') continue; // announced by announceSettings below
         const what = { 'plan-approved': `plan approved (${(e.cps || []).join(', ')})`, approved: `${e.cp} approved`, feedback: `feedback${e.cp ? ` on ${e.cp}` : ''}: ${e.text}`, 'changes-requested': `changes requested on ${e.cp}: ${e.text}` }[e.event];
         console.log(`theseus: ${what}`);
       }
+      announceSettings(p);
       if (fresh.some(e => e.event === 'approved')) console.log('theseus: commit the approved checkpoint, then continue.');
       if (fresh.some(e => e.event === 'feedback' || e.event === 'changes-requested')) console.log('theseus: read it with: theseus.js inbox');
       return;
@@ -805,10 +954,11 @@ async function cmdWait(p, { flags }) {
 function cmdStatus(p, { flags }) {
   const snap = snapshot(p);
   if (flags.json) {
-    console.log(JSON.stringify(snap, null, 2));
+    console.log(JSON.stringify(flags.full ? snap : summary(snap), null, flags.full ? 2 : 0));
     return;
   }
-  console.log(`theseus: ${snap.run.key} — autonomy ${snap.run.autonomy}, approvals ${snap.run.approvals}`);
+  const settings = settingsOf(snap.run);
+  console.log(`theseus: ${snap.run.key} — autonomy ${settings.autonomy}, approvals ${settings.approvals}, checkpoint size ${settings.granularity}`);
   for (const r of snap.checkpoints) {
     const gates = r.gates ? `  red:${r.gates.red} tests:${r.gates.tests} visual:${r.gates.visual} review:${r.gates.review}` : '';
     console.log(`  ${r.id.padEnd(5)} ${r.status.padEnd(17)} ${r.title}${gates}`);
@@ -820,6 +970,27 @@ function cmdStatus(p, { flags }) {
   const server = liveServer(p);
   if (server) console.log(`  viewer: ${server.url}`);
   console.log(`  next: ${snap.next}`);
+}
+
+function cmdDiff(p, { positionals, flags }) {
+  const { state } = loadRun(p);
+  const cp = findCheckpoint(state, positionals[0]);
+  if (!cp.base) fail(`${cp.id} has not begun, so it has no diff yet`);
+  let from = cp.base;
+  if (flags['since-review']) {
+    const review = readEvidence(p, cp.id, 'review');
+    if (!review || !review.reviewedTree) fail(`no review recorded yet for ${cp.id} — give reviewers the full diff: theseus.js diff ${cp.id}`);
+    from = review.reviewedTree;
+  }
+  const now = snapshotTree(p, cp.base);
+  const out = git(p.root, ['diff', from, now, '--', ...pathspec(p)]).toString('utf8');
+  process.stdout.write(out || `(no changes${flags['since-review'] ? ' since the last review' : ''})\n`);
+}
+
+function cmdConfig(p, { flags }) {
+  const changes = setSettings(p, { autonomy: flags.autonomy, approvals: flags.approvals, granularity: flags.granularity }, { source: 'cli' });
+  const { run } = loadRun(p);
+  console.log(`theseus: settings changed — ${describeChanges(changes)}${run.approvals === 'any' ? ' (reported by agent)' : ''}`);
 }
 
 /** Stop-hook entry point. Must never throw: a broken hook must not wedge a session. */
@@ -953,11 +1124,30 @@ const AGENT_MARKER = '<!-- generated by tha-theseus (theseus.js agents) — re-r
 const AGENTS = {
   planner: {
     source: 'checkpoints.md',
-    description: 'Theseus checkpoint planner. Turns a reference (legacy code, running app, mock or spec) into small, ordered checkpoints with done-criteria and planned tests, as JSON for theseus.js plan.',
+    description: 'Theseus checkpoint planner. Turns a reference (legacy code, running app, mock or spec) into ordered checkpoints with done-criteria and planned tests, as JSON for theseus.js plan.',
+    claudeTools: 'Read, Grep, Glob',
+    copilotTools: "['read', 'search']",
+    omitClaudeMd: true,
+    effort: 'medium',
+    maxTurns: 40,
+  },
+  builder: {
+    source: 'builder.md',
+    description: 'Theseus builder. Writes one checkpoint\'s planned tests, records them failing, then implements until theseus.js records them passing; in fix mode, fixes given review findings.',
+    claudeTools: 'Read, Edit, Write, Bash, Grep, Glob',
+    copilotTools: "['read', 'edit', 'search', 'execute']",
+    omitClaudeMd: false, // it must follow the project's own rules
+    effort: null,
+    maxTurns: 80,
   },
   reviewer: {
     source: 'reviewer.md',
     description: 'Theseus adversarial reviewer for gates 2 and 3. Judges a diff or a pair of screenshots against the given standards and reference only, and returns a VERDICT/FINDINGS block.',
+    claudeTools: 'Read, Grep, Glob',
+    copilotTools: "['read', 'search']",
+    omitClaudeMd: true, // blind to project instructions by design
+    effort: 'medium',
+    maxTurns: 30,
   },
 };
 
@@ -976,17 +1166,19 @@ function agentBody(role) {
   });
 }
 
-function agentFile(target, role, model) {
+function agentFile(target, role, { model, effort, maxTurns }) {
+  const spec = AGENTS[role];
   const name = `theseus-${role}`;
-  const description = JSON.stringify(AGENTS[role].description);
-  const lines = ['---', `name: ${name}`, `description: ${description}`];
-  if (target === 'claude') {
-    lines.push('tools: Read, Grep, Glob');
-  } else {
-    lines.push("tools: ['read', 'search']");
-  }
+  const lines = ['---', `name: ${name}`, `description: ${JSON.stringify(spec.description)}`];
+  lines.push(`tools: ${target === 'claude' ? spec.claudeTools : spec.copilotTools}`);
   // Copilot CLI rejects an array here (github/copilot-cli#2133), so always one string.
   if (model) lines.push(`model: ${JSON.stringify(model)}`);
+  // Claude Code only (code.claude.com/docs/en/sub-agents); Copilot files get no unverified fields.
+  if (target === 'claude') {
+    if (effort) lines.push(`effort: ${effort}`);
+    if (maxTurns) lines.push(`maxTurns: ${maxTurns}`);
+    if (spec.omitClaudeMd) lines.push('omitClaudeMd: true');
+  }
   lines.push('---', '', AGENT_MARKER, '', agentBody(role), '');
   return {
     file: target === 'claude' ? path.join('.claude', 'agents', `${name}.md`) : path.join('.github', 'agents', `${name}.agent.md`),
@@ -1002,7 +1194,13 @@ function cmdAgents(cwd, { flags }) {
   for (const target of targets) {
     for (const role of Object.keys(AGENTS)) {
       const model = stringFlag(flags, target === 'claude' ? `${role}-model` : `${role}-model-copilot`);
-      files.push(agentFile(target, role, model));
+      let effort = stringFlag(flags, `${role}-effort`) || AGENTS[role].effort;
+      if (effort === 'inherit') effort = null;
+      if (effort && !EFFORTS.includes(effort)) fail(`--${role}-effort must be one of ${EFFORTS.join(', ')} or inherit, not '${effort}'`);
+      const turns = stringFlag(flags, `${role}-max-turns`);
+      const maxTurns = turns === null ? AGENTS[role].maxTurns : Number(turns);
+      if (!Number.isInteger(maxTurns) || maxTurns < 1) fail(`--${role}-max-turns must be a whole number ≥ 1, not '${turns}'`);
+      files.push(agentFile(target, role, { model, effort, maxTurns }));
     }
   }
   // Check every destination before writing any, so a refusal leaves nothing half-done.
@@ -1030,6 +1228,8 @@ const COMMANDS = {
   begin: cmdBegin,
   record: cmdRecord,
   advance: cmdAdvance,
+  diff: cmdDiff,
+  config: cmdConfig,
   wait: cmdWait,
   inbox: cmdInbox,
   learn: cmdLearn,
@@ -1059,10 +1259,13 @@ async function main(argv) {
     } else {
       // The background server is told exactly where its state is, so it never
       // depends on where it happened to be spawned.
-      const p = process.env.THESEUS_STATE && args.flags.foreground
-        ? pathsFor(gitRoot(process.cwd()), process.env.THESEUS_STATE)
-        : resolvePaths(process.cwd());
+      const foreground = process.env.THESEUS_STATE && args.flags.foreground;
+      const p = foreground ? pathsFor(gitRoot(process.cwd()), process.env.THESEUS_STATE) : resolvePaths(process.cwd());
+      // Output that is handed to subagents verbatim stays free of notices.
+      const pure = command === 'diff' || command === 'learnings' || (command === 'status' && args.flags.json);
+      if (!foreground && !pure && command !== 'wait') announceSettings(p);
       await COMMANDS[command](p, args);
+      if (!pure && !['status', 'stop', 'serve'].includes(command) && fs.existsSync(p.runFile)) printNext(p);
     }
     return 0;
   } catch (error) {
@@ -1072,8 +1275,19 @@ async function main(argv) {
   }
 }
 
+/** End each command with what to do next, so the agent never needs `status` for it. */
+function printNext(p) {
+  try {
+    const { run, state } = loadRun(p);
+    console.log(`next: ${nextAction(p, state, run)}`);
+  } catch {
+    // the command already said what it needed to
+  }
+}
+
 module.exports = {
   GateError,
+  setSettings,
   resolvePaths,
   pathsFor,
   loadRun,

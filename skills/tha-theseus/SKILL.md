@@ -63,27 +63,36 @@ verdict, screenshot and learning as it happens, and it is where the human approv
 
 ### The orchestrator rule
 
-You are the **orchestrator**. You coordinate; you do not build. Each of these runs in
-a **fresh subagent**, given only its brief:
+You are the **orchestrator**. You coordinate; you do not build. Three kinds of
+**fresh subagent** do the work, each given only its brief:
 
-- pre-flight checker
-- checkpoint planner
-- test planner
-- test writer
-- builder
-- fixer
-- each reviewer
+| Agent | Does | Brief |
+|---|---|---|
+| `theseus-planner` | pre-flight, checkpoints, planned tests | [checkpoints.md](checkpoints.md) |
+| `theseus-builder` | one checkpoint: failing tests, then the code. In fix mode, it fixes findings | [builder.md](builder.md) |
+| `theseus-reviewer` | one independent verdict, visual or code | [reviewer.md](reviewer.md) |
 
-Long runs fail when one context window carries everything, so you keep only
-summaries.
+Long runs fail when one context window carries everything. Every subagent's start-up
+costs tokens too, so keep both down:
+
+- **Use the generated agents** (`theseus agents`, Step 1). They carry their brief,
+  narrow tools, an effort level and a turn cap. In Claude Code the planner and
+  reviewer also skip CLAUDE.md.
+- **Hand each subagent only its inputs:** the checkpoint, the learnings, and for
+  reviewers `theseus diff CP`. Never the plan, a transcript, or your own reasoning.
+- **Keep only their short reply.** The briefs cap it at about 10 lines.
+- **Don't read test output.** The script runs the tests, keeps the output and shows
+  it in the viewer. Read it only when a gate fails and the failure line isn't enough.
+- **Follow the `next:` line** every command prints. Don't run `status --json` to find
+  out what's next.
 
 How to get a fresh context:
 
 | Harness | Mechanism |
 |---|---|
-| Claude Code | the Agent tool (subagents) |
-| GitHub Copilot (VS Code, CLI) | its subagent / custom-agent mechanism |
-| Either, with a pinned model | the `theseus-planner` / `theseus-reviewer` custom agents (Step 1) |
+| Claude Code or Copilot, after `theseus agents` | dispatch to `theseus-planner` / `-builder` / `-reviewer` by name |
+| Claude Code, without them | the Agent tool, with the brief file as the prompt |
+| Copilot (VS Code, CLI), without them | its subagent mechanism, likewise |
 | Neither available | a fresh headless session: `claude -p "<brief>"` or `copilot -p "<brief>"` |
 | None of the above | do the work inline. For reviewers, record `--isolation none` |
 
@@ -135,9 +144,16 @@ Settle these with the human before anything else:
    | `viewer` (default) | only the human, by clicking in the viewer. CLI approvals are refused |
    | `any` | also the CLI. Use this only when the human cannot open a link to this machine (a cloud agent). Those approvals are shown as "reported by agent" |
 
-6. **Models (optional):** does the human want the checkpoint planner or the reviewers
-   on a specific model? If so, run `theseus agents`. It writes custom agents into the
-   repo, for Claude Code and/or Copilot:
+6. **Checkpoint size:**
+
+   | Setting | Means |
+   |---|---|
+   | `s-m` (default) | fewer, larger checkpoints, each a small vertical slice. Fewer subagent start-ups |
+   | `xs-s` | Helix-sized: many tiny checkpoints. Catches a wrong turn sooner, costs more |
+
+7. **Agents:** run `theseus agents` once per repo, unless the files exist already. It
+   writes lean `theseus-planner`, `theseus-builder` and `theseus-reviewer` agents for
+   Claude Code and/or Copilot. Ask whether the human wants specific models:
 
    ```bash
    theseus agents --target claude,copilot \
@@ -145,15 +161,23 @@ Settle these with the human before anything else:
      --reviewer-model sonnet --reviewer-model-copilot "<Copilot model name>"
    ```
 
-   - It writes `.claude/agents/theseus-{planner,reviewer}.md` and
-     `.github/agents/theseus-{planner,reviewer}.agent.md`.
    - Model names differ between the two tools, which is why there are two flags.
-   - Leave a flag out and that agent inherits the session's model.
-   - From then on, dispatch planning to `theseus-planner` and reviews to
-     `theseus-reviewer` by name.
+     Leave one out and that agent inherits the session's model.
+   - `--<role>-effort` and `--<role>-max-turns` override the lean defaults. Those
+     apply to Claude Code only.
    - **Copilot CLI caveat:** it has been reported to silently downgrade a subagent to
      the session's model when the subagent's model costs more (github/copilot-cli#2758).
      Start the session on at least the planner's model.
+
+**All of these except the reference can change mid-run.** The human changes them in
+the viewer's Settings panel, or asks you, and you run
+`theseus config --autonomy … --approvals … --granularity …`.
+
+- Under `approvals: viewer`, the CLI may only make autonomy or approvals *stricter*.
+  Loosening happens in the viewer.
+- When the human changes something, your next `theseus` command starts with a
+  `settings changed by …` line. Follow the new settings from that point.
+- A new checkpoint size applies to checkpoints planned from then on.
 
 ```bash
 theseus init --key HR-7 --reference "legacy/LeaveForm.tsx + docs/mock.html" \
@@ -173,12 +197,12 @@ already broken. Fix that first, or tell the human.
 Dispatch the **checkpoint planner** (`theseus-planner`, if you generated it) with
 [checkpoints.md](checkpoints.md) and the reference. It returns an ordered list:
 
-- small checkpoints (XS–S)
+- checkpoints at the run's size (`plan` prints it): XS–S or S–M
 - smallest and most foundational first
 - each one with an observable `done` and a `ui` flag
 
-Then dispatch the **test planner**. It attaches the test cases to every checkpoint, so
-the human approves what "done" means, not just titles.
+The same planner attaches the test cases to every checkpoint, so the human approves
+what "done" means, not just titles.
 
 ```bash
 theseus plan --file /tmp/checkpoints.json
@@ -206,19 +230,20 @@ For each checkpoint, in order:
 1. **Begin.**
    - `theseus begin CP1` refuses a dirty tree, an unapproved checkpoint, or a
      checkpoint whose predecessor isn't done.
-   - Run `theseus learnings` and hand its output to every subagent below.
-2. **Red.**
-   - The test writer writes this checkpoint's planned tests.
-   - Run `theseus record CP1 red`. The script runs the tests and **requires them to
-     fail**: a test that has never failed has proven nothing.
-3. **Build.** The builder implements against the tests and the reference. Its brief is:
+   - Run `theseus learnings` once and hand its output to every subagent below.
+2. **Build, test-first.** Dispatch one `theseus-builder` with:
    - the checkpoint block
    - the reference
    - the learnings
    - the files in scope
+   - the full `theseus.js` path
 
-   It is not given the whole plan.
-4. **Gate 1, behaviour:** `theseus record CP1 tests` runs the tests. They must pass.
+   It does two things, in order:
+   1. writes the planned tests and records them failing (`record CP1 red`)
+   2. implements until `record CP1 tests` passes (**gate 1, behaviour**)
+
+   The script refuses a passing run unless a failing one came first: a test that has
+   never failed has proven nothing. The builder is not given the whole plan.
 5. **Gate 2, visual.**
    - **`ui: false`:**
      `theseus record CP1 visual --skip "<why nothing visible changed>"`.
@@ -230,17 +255,23 @@ For each checkpoint, in order:
      4. Record each:
         `theseus record CP1 visual --reviewer look --findings N`.
 6. **Gate 3, adversarial review.**
-   - Dispatch **two separate reviewer subagents** (`theseus-reviewer`, if you
-     generated it). Each is given only [reviewer.md](reviewer.md), the diff, the
-     architecture docs and the learnings.
+   - Dispatch **two separate `theseus-reviewer` subagents**. Each is given only:
+     - the output of `theseus diff CP1`
+     - the architecture docs
+     - the learnings
+
      Never give them your reasoning, or the builder's.
    - Record each verdict:
      `theseus record CP1 review --reviewer a --findings N`.
 7. **Any findings.**
-   - A fresh **fixer** subagent fixes every one. Not the builder, and not you.
-   - Re-run gate 1, and gate 2 if anything visible could have changed. Otherwise
-     record `visual --carry "<reason>"`.
-   - Then dispatch **both** reviewers again.
+   - Dispatch a **fresh** `theseus-builder` in fix mode, with all the findings. It
+     fixes every one and re-records `tests`. Not the original builder, and not you.
+   - Re-run gate 2 if anything visible could have changed. Otherwise record
+     `visual --carry "<reason>"`.
+   - Then dispatch **both** reviewers again. Each gets only:
+     - its own previous findings
+     - `theseus diff CP1 --since-review`, the changes since the last review rather
+       than the whole diff again
    - The script rejects any gate that passed before the code changed, so there is no
      way around this.
 8. **Memory.** Distil every finding and every piece of human feedback into one
@@ -255,7 +286,7 @@ For each checkpoint, in order:
      then run `theseus wait`.
      - **Approved:** the checkpoint is done.
      - **Changes requested:** it goes back to `building`. Read `theseus inbox`, hand
-       the request to a fixer, and run the gates again.
+       the request to a fresh `theseus-builder` in fix mode, and run the gates again.
    - With `--approvals any` and a human approving in chat:
      `theseus advance CP1 --approved-by <name>`.
 10. **Commit** the checkpoint (code and tests) in the repo's commit style. Then begin
