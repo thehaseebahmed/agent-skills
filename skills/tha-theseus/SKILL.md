@@ -122,7 +122,27 @@ theseus status
   `switch` resumes later. Switching and starting runs are refused while a checkpoint
   is in progress: two runs can't build in one working tree at once.
 
-### Step 1a: Pin the reference and the rules
+### Step 1: Requirements discovery and configuration
+
+Before checkpoint planning, lead a requirements conversation **inline in normal chat**.
+This is an enforced phase, not a recon note. Ask and resolve, in order:
+
+1. the ticket or task details and the concrete goal;
+2. whether this is a `feature` or `bug`;
+3. for a bug, the current behavior;
+4. the expected behavior and observable acceptance criteria;
+5. the human's proposed implementation;
+6. inspect the relevant code, local conventions, architecture guidance, and reference;
+   critique that proposal, recommend an approach with rationale, and ask any final
+   targeted questions.
+
+Do not submit a brief while a material question remains. Resolve it with the human,
+or record an explicit human-approved assumption. During discovery you may inspect
+code, standards, and architecture, but must not create checkpoints, dispatch the
+planner, or implement code.
+
+Initial configuration is agent-side; do not start the viewer yet. The viewer starts
+only after the completed brief has been submitted.
 
 Settle these with the human before anything else:
 
@@ -148,27 +168,20 @@ Settle these with the human before anything else:
    |---|---|
    | `step` (default) | every checkpoint |
    | `batch:N` | once per N checkpoints |
-   | `unattended` | nothing until the PR; every approval is recorded as deferred |
+| `unattended` | unavailable until the viewer approves the requirements brief; then the human may enable it in the viewer |
 
-5. **Where approvals come from:**
-
-   | Setting | Who can approve |
-   |---|---|
-   | `viewer` (default) | only the human, by clicking in the viewer. CLI approvals are refused |
-   | `any` | also the CLI. Use this only when the human cannot open a link to this machine (a cloud agent). Those approvals are shown as "reported by agent" |
-
-6. **Checkpoint size** (CLI only, rarely changed): `--granularity s-m`, the default,
+5. **Checkpoint size** (CLI only, rarely changed): `--granularity s-m`, the default,
    gives fewer, larger checkpoints, each a small vertical slice. `xs-s` gives
    Helix-sized tiny ones, which cost more subagent start-ups.
 
-7. **Reviews:** which review gates run, and how many code reviewers.
+6. **Reviews:** which review gates run, and how many code reviewers.
 
    | Setting | Values | Means |
    |---|---|---|
    | `--visual` | `on` (default) / `off` | Whether gate 2 runs. Off skips it for every checkpoint, UI ones included |
    | `--reviewers` | `2` (default) / `1` / `0` | Exactly how many code reviewers gate 3 deploys; every one must be clean. `0` skips gate 3 |
 
-8. **Agents:** run `theseus agents` once per repo, unless the files exist already. It
+7. **Agents:** run `theseus agents` once per repo, unless the files exist already. It
    writes lean `theseus-planner`, `theseus-builder` and `theseus-reviewer` agents for
    Claude Code and/or Copilot. Ask whether the human wants specific models:
 
@@ -186,16 +199,16 @@ Settle these with the human before anything else:
      the session's model when the subagent's model costs more (github/copilot-cli#2758).
      Start the session on at least the planner's model.
 
-**Autonomy, approvals and reviews can change mid-run.**
+**Autonomy and reviews can change mid-run. All approvals are viewer-only.**
 
 - In the viewer, each one is a chip in the header. Clicking it lists the choices in
   plain words ("approve every 3 checkpoints"); picking one saves it.
 - Or the human asks you, and you run
-  `theseus config --autonomy … --approvals … --visual … --reviewers …`.
+  `theseus config --autonomy … --visual … --reviewers …` for stricter settings.
   Checkpoint size changes only this way: `--granularity`.
 
-- Under `approvals: viewer`, the CLI may only make settings *stricter*: more
-  approvals, visual on, more reviewers. Loosening happens in the viewer.
+- The CLI may only make autonomy or review settings stricter. The viewer controls
+  any relaxation; it alone may enable `unattended`, and only after brief approval.
 - When the human changes something, your next `theseus` command starts with a
   `settings changed by …` line. Follow the new settings from that point.
 - A new checkpoint size applies to checkpoints planned from then on.
@@ -203,38 +216,40 @@ Settle these with the human before anything else:
 ```bash
 theseus init --key HR-7 --reference "legacy/LeaveForm.tsx + docs/mock.html" \
   --test-cmd "npm test" --arch "ARCHITECTURE.md,docs/ui.md" --autonomy step
-theseus serve
 ```
 
-`serve` starts the viewer in the background and prints its link. **Give the human the
-link now.** It is how they follow the run and how they approve.
+### Step 1b: Submit the resolved requirements brief
 
-### Step 1b: The brief — confirm understanding before any deep work
-
-Do a **light recon only**, inline, with no subagents:
-- read the reference (the spec, the mock, or a skim of the legacy screen)
-- read the repo's top-level layout and README
-
-Stop there. Then write a brief and submit it:
+After the conversation and focused review are complete, submit this concise document:
 
 ```json
 {
+  "task": "ticket or task detail",
   "goal": "one or two sentences: what this run achieves",
-  "understanding": "in plain words, what you believe is being asked",
-  "areas": ["what you will create checkpoints for — the human checks nothing is missing"],
-  "in_scope": [], "out_of_scope": [], "assumptions": [], "questions": []
+  "change_type": "feature",
+  "current_behavior": "required for bugs; optional for features",
+  "expected_behavior": "the intended behavior",
+  "acceptance_criteria": ["observable outcomes"],
+  "user_proposed_approach": "what the user suggested",
+  "reviewed_approach": "what code and standards review found about that proposal",
+  "recommended_approach": "the approach the agent recommends",
+  "approach_rationale": "why this approach fits the codebase and requirements",
+  "checkpoint_areas": ["areas the planner must cover"],
+  "scope_boundaries": [], "assumptions": [], "risks": [],
+  "resolved_decisions": [], "unresolved_questions": []
 }
 ```
 
 ```bash
 theseus brief --file brief.json
+theseus serve
 theseus wait     # the human confirms it, or requests changes, in the viewer
 ```
 
 - **Changes requested:** read them (`theseus inbox`), revise, and submit again.
-- **`plan` is refused** until the brief is confirmed.
-- **Under `--approvals any`**, a confirmation given in chat is recorded with
-  `theseus approve-brief --by <name>`.
+- **`plan` is refused** until a valid requirements brief is confirmed in the viewer.
+- The script rejects missing required fields, a bug without `current_behavior`, or
+  any non-empty `unresolved_questions` list.
 
 Only after confirmation do the expensive work: pre-flight, deep reading and the
 planner subagent.
@@ -272,8 +287,8 @@ theseus wait     # returns when they approve or send feedback; re-run on timeout
 
 - **Feedback instead of approval:** read it with `theseus inbox`, revise, `plan`
   again, and wait again.
-- **With `--approvals any`**, a human who has approved in chat is recorded with
-  `theseus approve-plan --by <name>`.
+- The checkpoint list is always approved in the viewer, even when the human later
+  enables unattended checkpoint autonomy.
 
 ### Step 3: The checkpoint loop
 
@@ -296,57 +311,56 @@ For each checkpoint, in order:
 
    The script refuses a passing run unless a failing one came first: a test that has
    never failed has proven nothing. The builder is not given the whole plan.
-5. **Gate 2, visual.** If the run's visual review is `off`, skip this step: the gate
-   counts as passed.
-   - **`ui: false`:**
-     `theseus record CP1 visual --skip "<why nothing visible changed>"`.
-   - **`ui: true`:** follow [gates.md](gates.md#gate-2-visual).
-     1. Put the reference and the build in the **same state**.
-     2. Screenshot both into `.theseus/current/evidence/<CP>/`. The viewer shows
-        them side by side.
-     3. Dispatch two blind reviewers, one for appearance and one for interaction.
-     4. Record each:
-        `theseus record CP1 visual --reviewer look --findings N`.
-6. **Gate 3, adversarial review.**
-   - If the run has `reviewers: 0`, skip this step: the gate counts as passed.
-   - Otherwise dispatch **exactly as many separate `theseus-reviewer` subagents as
-     the run's `reviewers` setting**, 1 or 2. Never more: the script refuses an extra
-     reviewer id. Each is given only:
-     - the output of `theseus diff CP1`
-     - the architecture docs
-     - the learnings
+3. **Gate 2, visual.** If the run's visual review is `off`, skip this step: the gate
+    counts as passed.
+    - **`ui: false`:**
+      `theseus record CP1 visual --skip "<why nothing visible changed>"`.
+    - **`ui: true`:** follow [gates.md](gates.md#gate-2-visual).
+      1. Put the reference and the build in the **same state**.
+      2. Screenshot both into `.theseus/current/evidence/<CP>/`. The viewer shows
+         them side by side.
+      3. Dispatch two blind reviewers, one for appearance and one for interaction.
+      4. Record each:
+         `theseus record CP1 visual --reviewer look --findings N`.
+4. **Gate 3, adversarial review.**
+    - If the run has `reviewers: 0`, skip this step: the gate counts as passed.
+    - Otherwise dispatch **exactly as many separate `theseus-reviewer` subagents as
+      the run's `reviewers` setting**, 1 or 2. Never more: the script refuses an extra
+      reviewer id. Each is given only:
+      - the output of `theseus diff CP1`
+      - the architecture docs
+      - the learnings
 
-     Never give them your reasoning, or the builder's.
-   - Record each verdict:
-     `theseus record CP1 review --reviewer a --findings N`.
-7. **Any findings.**
-   - Dispatch a **fresh** `theseus-builder` in fix mode, with all the findings. It
-     fixes every one and re-records `tests`. Not the original builder, and not you.
-   - Re-run gate 2 if anything visible could have changed. Otherwise record
-     `visual --carry "<reason>"`.
-   - Then dispatch **both** reviewers again. Each gets only:
-     - its own previous findings
-     - `theseus diff CP1 --since-review`, the changes since the last review rather
-       than the whole diff again
-   - The script rejects any gate that passed before the code changed, so there is no
-     way around this.
-8. **Memory.** Distil every finding and every piece of human feedback into one
-   reusable line:
-   `theseus learn --cp CP1 --source reviewer "<rule>"`.
-   Write rules, not incidents: "inject the clock, never call `Date.now` in handlers",
-   not "fixed the date bug".
-9. **Gate 4, human.**
-   - Run `theseus advance CP1`. The script checks gates 1–3 at the current code.
-   - Under `step` it stops at `awaiting-approval`. The viewer shows the human the
-     evidence, with **Approve** and **Request changes** buttons. Tell them it's ready,
-     then run `theseus wait`.
-     - **Approved:** the checkpoint is done.
-     - **Changes requested:** it goes back to `building`. Read `theseus inbox`, hand
-       the request to a fresh `theseus-builder` in fix mode, and run the gates again.
-   - With `--approvals any` and a human approving in chat:
-     `theseus advance CP1 --approved-by <name>`.
-10. **Commit** the checkpoint (code and tests) in the repo's commit style. Then begin
-    the next one.
+      Never give them your reasoning, or the builder's.
+    - Record each verdict:
+      `theseus record CP1 review --reviewer a --findings N`.
+5. **Any findings.**
+    - Dispatch a **fresh** `theseus-builder` in fix mode, with all the findings. It
+      fixes every one and re-records `tests`. Not the original builder, and not you.
+    - Re-run gate 2 if anything visible could have changed. Otherwise record
+      `visual --carry "<reason>"`.
+    - Then dispatch **both** reviewers again. Each gets only:
+      - its own previous findings
+      - `theseus diff CP1 --since-review`, the changes since the last review rather
+        than the whole diff again
+    - The script rejects any gate that passed before the code changed, so there is no
+      way around this.
+6. **Memory.** Distil every finding and every piece of human feedback into one
+    reusable line:
+    `theseus learn --cp CP1 --source reviewer "<rule>"`.
+    Write rules, not incidents: "inject the clock, never call `Date.now` in handlers",
+    not "fixed the date bug".
+7. **Gate 4, human.**
+    - Run `theseus advance CP1`. The script checks gates 1–3 at the current code.
+    - Under `step` it stops at `awaiting-approval`. The viewer shows the human the
+      evidence, with **Approve** and **Request changes** buttons. Tell them it's ready,
+      then run `theseus wait`.
+      - **Approved:** the checkpoint is done.
+      - **Changes requested:** it goes back to `building`. Read `theseus inbox`, hand
+        the request to a fresh `theseus-builder` in fix mode, and run the gates again.
+    - CLI approval flags are unavailable; wait for the viewer action.
+8. **Commit** the checkpoint (code and tests) in the repo's commit style. Then begin
+     the next one.
 
 The full pass/fail criteria and re-run rules are in [gates.md](gates.md).
 
@@ -368,8 +382,7 @@ When every checkpoint is done, the human tries the whole feature as a user would
   `theseus status`.
 - **Stopping early:** `theseus abandon --reason "…"`. The human confirms this too,
   and the reason is kept in the summary.
-- **Under `--approvals any`**, `complete` and `abandon` take `--approved-by <name>`
-  for a confirmation given in chat.
+- Completion and abandonment are also confirmed in the viewer.
 
 ### Enforcement in Claude Code
 
@@ -386,7 +399,7 @@ Other harnesses rely on the script's refusals alone.
 
 | Rationalization | Reality |
 |---|---|
-| "I'll research properly first so the brief is accurate" | The brief exists to catch a wrong understanding *before* that cost is spent. Light recon, brief, confirmation — then research |
+| "I'll research properly first so the brief is accurate" | Requirements discovery includes the targeted code and standards review needed to critique the proposed approach. Do not plan or implement until the resolved brief is approved |
 | "The reviewer's finding is just a nit" | Every finding is fixed or the gate stays shut. If a rule is wrong, change the architecture doc with the human, then re-review. Don't argue it away mid-checkpoint |
 | "I fixed it after the review; it's obviously fine" | The fix is new code nobody has reviewed. The fingerprint check exists because this is the commonest way bad code ships |
 | "The tests pass, so the UI is fine" | Gate 1 proves behaviour. Spacing, states and interaction are gate 2's job, and they drift silently |
@@ -397,8 +410,8 @@ Other harnesses rely on the script's refusals alone.
 | "I'll just build it myself; spinning up a subagent is slow" | Over 30 checkpoints your context fills, and quality falls where nobody is looking. Coordinate; delegate |
 | "No subagents here, so I'll say the review was isolated anyway" | Record `--isolation none`. A false claim of isolation is worse than none |
 | "The human is busy; I'll approve and move on" | Only a human approves. If they want fewer interruptions, the fix is `batch:N` or `unattended`, chosen by them |
-| "I'll record the approval on the CLI and save them a click" | Under `--approvals viewer` the script refuses. Under `any`, the viewer marks it "reported by agent" for everyone to see. Ask, then `theseus wait` |
-| "The viewer link didn't open, so I'll skip approval" | Say so, and ask the human how they want to approve. Only they can switch to `--approvals any` or `unattended` |
+| "I'll record the approval on the CLI and save them a click" | CLI approval commands do not exist. Ask, then `theseus wait` |
+| "The viewer link didn't open, so I'll skip approval" | Say so and restore access to the viewer. Approval cannot be moved to chat or the CLI |
 | "`wait` timed out, so they must be fine with it" | Silence is not approval. Run `wait` again, or remind them the viewer is waiting |
 | "The learning is specific to this checkpoint" | Then generalise it until it isn't, or it will be relearned on the next screen |
 
@@ -422,8 +435,7 @@ The skill was applied correctly when:
       was told about each one that does
 - [ ] Every checkpoint is its own commit, in order
 - [ ] The learnings gained a rule for every finding and every piece of human feedback
-- [ ] No approval shows as "reported by agent" unless the run used `--approvals any`
-      and the human approved in chat
+- [ ] Every approval was made in the viewer
 - [ ] The viewer was stopped (`theseus stop`)
 - [ ] Under `unattended`, the PR description lists the deferred approvals
 - [ ] The repo's full test suite passes on the final commit, run with its own command

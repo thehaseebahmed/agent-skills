@@ -226,13 +226,6 @@
         { value: 'unattended', short: 'in the PR', text: 'Only in the PR', hint: 'The agent stops asking; you review the pull request.' },
       ],
     },
-    approvals: {
-      label: 'approvals from',
-      options: [
-        { value: 'viewer', short: 'viewer only', text: 'This viewer only', hint: 'Only your clicks here count as approval.' },
-        { value: 'any', short: 'viewer or agent', text: 'Viewer or agent', hint: 'The agent may also record an approval you give in chat.' },
-      ],
-    },
     visual: {
       label: 'visual review',
       fallback: 'on',
@@ -349,10 +342,13 @@
       const opened = openMenu === key;
       const choice = def.options.find(o => o.value === current);
       const label = `${def.label}: ${choice ? choice.short : current}`;
-      const menu = opened ? `<div class="menu" role="menu">${def.options.map(o => `
-        <button role="menuitemradio" aria-checked="${o.value === current}" data-setting="${key}" data-to="${esc(o.value)}"${o.value === current ? ' disabled' : ''}>
+      const menu = opened ? `<div class="menu" role="menu">${def.options.map(o => {
+        const unavailable = key === 'autonomy' && o.value === 'unattended' && (!r.brief || r.brief.status !== 'confirmed');
+        return `
+        <button role="menuitemradio" aria-checked="${o.value === current}" data-setting="${key}" data-to="${esc(o.value)}"${o.value === current || unavailable ? ' disabled' : ''}>
           <span class="tick">${o.value === current ? '✓' : ''}</span><span>${esc(o.text)}<small>${esc(o.hint)}</small></span>
-        </button>`).join('')}</div>` : '';
+        </button>`;
+      }).join('')}</div>` : '';
       if (ro) return `<span class="chip">${esc(label)}</span>`;
       return `<span class="setting"><button class="chip toggle" data-menu="${key}" aria-haspopup="menu" aria-expanded="${opened}">${esc(label)}</button>${menu}</span>`;
     }).join('')
@@ -389,7 +385,6 @@
     }
     const w = data.warnings;
     if (w.isolationNone.length) out.push(`<div class="banner warn"><p>Reviewed <b>without context isolation</b>: ${w.isolationNone.map(esc).join(', ')}. Treat those reviews with suspicion.</p></div>`);
-    if (w.cliApprovals.length) out.push(`<div class="banner warn"><p>Approval <b>reported by the agent</b>, not clicked here: ${w.cliApprovals.map(esc).join(', ')}.</p></div>`);
     $('banners').innerHTML = out.join('');
   }
 
@@ -401,29 +396,37 @@
     const b = data.run.brief;
     if (!b) {
       $('brief').innerHTML = data.run.briefRequired && !data.checkpoints.length
-        ? '<section class="panel card"><div class="body"><p class="empty">The agent is doing a light read of the reference and will post its understanding here for you to confirm before any planning.</p></div></section>'
+        ? '<section class="panel card"><div class="body"><p class="empty">The agent is conducting the requirements conversation in chat. The viewer opens when its completed brief is ready for your approval.</p></div></section>'
         : '';
       return;
     }
     const pill = { pending: '<span class="pill s-waiting">waiting for you</span>', draft: '<span class="pill s-stale">changes requested</span>', confirmed: '<span class="pill s-pass">confirmed</span>' }[b.status] || '';
     const body = `
+      <p><b>Task:</b> ${esc(b.task)}</p>
       <p><b>Goal:</b> ${esc(b.goal)}</p>
-      <p><b>What I understand:</b> ${esc(b.understanding)}</p>
+      <p><b>Change type:</b> ${esc(b.change_type)}</p>
+      ${b.current_behavior ? `<p><b>Current behavior:</b> ${esc(b.current_behavior)}</p>` : ''}
+      <p><b>Expected behavior:</b> ${esc(b.expected_behavior)}</p>
+      <p><b>User-proposed approach:</b> ${esc(b.user_proposed_approach)}</p>
+      <p><b>Reviewed approach:</b> ${esc(b.reviewed_approach)}</p>
+      <p><b>Recommended approach:</b> ${esc(b.recommended_approach)}</p>
+      <p><b>Rationale:</b> ${esc(b.approach_rationale)}</p>
       <div class="cols">
-        ${listBlock('Checkpoints will cover', b.areas)}
-        ${listBlock('In scope', b.in_scope)}
-        ${listBlock('Out of scope', b.out_of_scope)}
+        ${listBlock('Acceptance criteria', b.acceptance_criteria)}
+        ${listBlock('Checkpoint areas', b.checkpoint_areas)}
+        ${listBlock('Scope boundaries', b.scope_boundaries)}
         ${listBlock('Assumptions', b.assumptions)}
-        ${listBlock('Open questions', b.questions)}
+        ${listBlock('Risks', b.risks)}
+        ${listBlock('Resolved decisions', b.resolved_decisions)}
       </div>
       ${b.status === 'pending' && !isReadOnly() ? `
-        <p class="muted" style="margin-top:12px">Nothing is researched in depth or planned until you confirm this.</p>
-        <textarea data-keep="brief-changes" placeholder="What did it get wrong or miss? (needed for Request changes)"></textarea>
-        <div class="actions"><button class="btn primary" id="approve-brief">Confirm understanding</button><button class="btn" id="brief-changes">Request changes</button></div>` : ''}`;
+        <p class="muted" style="margin-top:12px">Requirements are resolved. Approve this brief before planning begins.</p>
+        <textarea data-keep="brief-changes" placeholder="What should be corrected? (needed for Request changes)"></textarea>
+        <div class="actions"><button class="btn primary" id="approve-brief">Approve requirements brief</button><button class="btn" id="brief-changes">Request changes</button></div>` : ''}`;
     // Once confirmed and planned, keep it out of the way.
     $('brief').innerHTML = b.status === 'confirmed' && data.checkpoints.length
       ? `<details class="panel card"><summary class="body" style="cursor:pointer"><b>Brief</b> ${pill}</summary><div class="body">${body}</div></details>`
-      : `<section class="panel card"><div class="body"><h3>Brief — what the agent understood ${pill}</h3>${body}</div></section>`;
+      : `<section class="panel card"><div class="body"><h3>Requirements brief ${pill}</h3>${body}</div></section>`;
   }
 
   function renderSummary() {
@@ -438,7 +441,6 @@
       <div class="stats">
         ${stat(`${sm.checkpoints.done}/${sm.checkpoints.total}`, 'checkpoints done')}
         ${stat(sm.approvals.viewer, 'approved by you')}
-        ${stat(sm.approvals.agent, 'reported by agent')}
         ${stat(sm.approvals.deferred, 'deferred to PR')}
         ${stat(`${sm.reviews.code.verdicts} / ${sm.reviews.code.findings}`, 'code verdicts / findings')}
         ${stat(`${sm.reviews.visual.verdicts} / ${sm.reviews.visual.findings}`, 'visual verdicts / findings')}
@@ -496,7 +498,7 @@
       return;
     }
     const approval = cp.approval
-      ? (cp.approval.deferred ? 'Approval deferred to PR review.' : `Approved by ${cp.approval.by}${cp.approval.source === 'cli' ? ' (reported by agent)' : ''}${cp.approval.batch ? ' (batch)' : ''}.`)
+      ? (cp.approval.deferred ? 'Approval deferred to PR review.' : `Approved by ${cp.approval.by}${cp.approval.batch ? ' (batch)' : ''}.`)
       : '';
     const waiting = cp.status === 'awaiting-approval';
     $('detail').innerHTML = `
@@ -539,7 +541,7 @@
         case 'planned': return `${e.count} checkpoints planned`;
         case 'added': return `added ${(e.cps || []).join(', ')}`;
         case 'init': return `run ${e.key} started`;
-        case 'brief-submitted': return `brief submitted (${e.areas} area${e.areas === 1 ? '' : 's'})`;
+        case 'brief-submitted': return `requirements brief submitted (${e.areas} checkpoint area${e.areas === 1 ? '' : 's'})`;
         case 'brief-approved': return `brief confirmed${e.by ? ` by ${e.by}` : ''}`;
         case 'brief-changes-requested': return `changes requested on the brief: ${e.text}`;
         case 'completion-requested': return 'agent asked to complete the run';

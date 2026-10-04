@@ -50,9 +50,9 @@ Its state goes in `.theseus/` in the directory Copilot is working in.
   you follow the run and approve checkpoints.
 - **VS Code Remote and Codespaces:** port forwarding may expose the link. This pack
   has not verified that.
-- **The cloud coding agent on GitHub.com:** the link points at the agent's own
-  runner, so you can't open it. Start those runs with `--approvals any` or
-  `--autonomy unattended`, and approve in the PR.
+- **The cloud coding agent on GitHub.com:** use Theseus only when the human can
+  access its viewer. Theseus has no chat or CLI approval fallback; all brief, plan,
+  checkpoint, and close approvals are made in the viewer.
 
 ### Custom agents with their own model
 

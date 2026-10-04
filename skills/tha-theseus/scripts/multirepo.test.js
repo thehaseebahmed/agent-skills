@@ -14,6 +14,8 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const SCRIPT = path.join(__dirname, 'theseus.js');
+const core = require('./theseus');
+const { requirementsBrief } = require('./brief-fixture');
 const PRE_MULTIREPO = '8bf829e';
 
 function env() {
@@ -45,7 +47,7 @@ function ok(dir, ...args) {
 /** Every run started by this version needs a confirmed brief before it can plan. */
 function confirmBrief(dir) {
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'theseus-brief-')), 'brief.json');
-  fs.writeFileSync(file, JSON.stringify({ goal: 'g', understanding: 'u', areas: ['a'] }));
+  fs.writeFileSync(file, JSON.stringify(requirementsBrief()));
   ok(dir, 'brief', '--file', file);
   const core = require('./theseus');
   core.approveBrief(core.resolvePaths(dir), { by: 'human (viewer)', source: 'viewer' });
@@ -83,15 +85,25 @@ const PLAN = [
   { title: 'Leave form', done: 'form shows the API error', ui: false, tests: ['shows error'], repos: ['api', 'web'] },
 ];
 
+/** The human clicks Approve plan in the viewer; the agent never approves. */
+function viewerApprovePlan(dir) {
+  core.approvePlan(core.resolvePaths(dir), { by: 'human (viewer)', source: 'viewer' });
+}
+
+/** The human clicks Approve in the viewer; the agent never approves. */
+function viewerApproveCp(dir, cp) {
+  core.advance(core.resolvePaths(dir), cp, { by: 'human (viewer)', source: 'viewer' });
+}
+
 /** A parent folder (not a repo) holding api/ and web/, with an approved two-checkpoint plan. */
 function workspace({ begin = true } = {}) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'theseus-ws-')));
   makeRepo(path.join(dir, 'api'), 'api.done');
   makeRepo(path.join(dir, 'web'), 'web.done');
-  ok(dir, 'init', '--key', 'WS-1', '--reference', 'spec.md', '--repos', 'api,web', '--test-cmd', 'node check.js', '--approvals', 'any');
+  ok(dir, 'init', '--key', 'WS-1', '--reference', 'spec.md', '--repos', 'api,web', '--test-cmd', 'node check.js');
   confirmBrief(dir);
   ok(dir, 'plan', '--file', writeJson(path.dirname(dir), `plan-${path.basename(dir)}.json`, PLAN));
-  ok(dir, 'approve-plan', '--by', 'h');
+  viewerApprovePlan(dir);
   if (begin) ok(dir, 'begin', 'CP1');
   return dir;
 }
@@ -159,7 +171,7 @@ test('begin refuses when any repo in the run is dirty, and names it', () => {
 test('red and tests run in each of the checkpoint repos; one failing repo fails gate 1', () => {
   const dir = workspace();
   passGates(dir, 'CP1', 'api/api.done');
-  ok(dir, 'advance', 'CP1', '--approved-by', 'h');
+  viewerApproveCp(dir, 'CP1');
   commitAll(path.join(dir, 'api'), 'cp1');
   ok(dir, 'begin', 'CP2');
   assert.match(ok(dir, 'record', 'CP2', 'red', '--cmd', 'node -e "process.exit(require(\'fs\').existsSync(\'cp2\') ? 0 : 1)"').out, /red recorded \(failing in api, web\)/);
@@ -181,7 +193,7 @@ test('a change in a repo the checkpoint does not list makes gates stale and is n
   const dir = workspace();
   passGates(dir, 'CP1', 'api/api.done');
   fs.writeFileSync(path.join(dir, 'web', 'sneaky.txt'), 'x');
-  refused(dir, /gate 1 \(tests\) for CP1 passed against older code/, 'advance', 'CP1', '--approved-by', 'h');
+  refused(dir, /gate 1 \(tests\) for CP1 passed against older code/, 'advance', 'CP1');
   assert.match(ok(dir, 'status').out, /warning: CP1 also changed web, which it doesn't list in its repos/);
   assert.match(ok(dir, 'record', 'CP1', 'tests').out, /warning — CP1 also changed web/);
 });
@@ -189,7 +201,8 @@ test('a change in a repo the checkpoint does not list makes gates stale and is n
 test('the multi-repo happy path completes', () => {
   const dir = workspace();
   passGates(dir, 'CP1', 'api/api.done');
-  assert.match(ok(dir, 'advance', 'CP1', '--approved-by', 'h').out, /CP1 done/);
+  const full = core.advance(core.resolvePaths(dir), 'CP1', { by: 'human (viewer)', source: 'viewer' });
+  assert.match(core.doneMessage(full), /CP1 done/);
 });
 
 // ── diff ─────────────────────────────────────────────────────────────────────
@@ -243,15 +256,15 @@ test('a dirty submodule no longer crashes, and changing it makes gates stale', (
   makeRepo(app, 'impl.txt');
   git(app, 'submodule', 'add', '-q', path.join(root, 'lib'), 'lib');
   git(app, 'commit', '-q', '-m', 'add submodule');
-  ok(app, 'init', '--key', 'S', '--reference', 'r', '--test-cmd', 'node check.js', '--approvals', 'any');
+  ok(app, 'init', '--key', 'S', '--reference', 'r', '--test-cmd', 'node check.js');
   confirmBrief(app);
   ok(app, 'plan', '--file', writeJson(root, 'plan.json', [{ title: 't', done: 'd', ui: false, tests: ['x'] }]));
-  ok(app, 'approve-plan', '--by', 'h');
+  viewerApprovePlan(app);
   ok(app, 'begin', 'CP1');
   fs.writeFileSync(path.join(app, 'lib', 'inside.txt'), 'dirty submodule\n');
   passGates(app, 'CP1', 'impl.txt');
   fs.writeFileSync(path.join(app, 'lib', 'inside.txt'), 'changed again\n');
-  refused(app, /gate 1 \(tests\) for CP1 passed against older code/, 'advance', 'CP1', '--approved-by', 'h');
+  refused(app, /gate 1 \(tests\) for CP1 passed against older code/, 'advance', 'CP1');
 });
 
 // ── backwards compatibility ──────────────────────────────────────────────────
@@ -270,6 +283,7 @@ test('a single-repo run recorded by the previous version carries on unchanged', 
 
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'theseus-compat-')));
   makeRepo(dir, 'impl.txt');
+  // The previous version still had the approvals setting; its own CLI calls keep it.
   old(dir, 'init', '--key', 'OLD', '--reference', 'r', '--test-cmd', 'node check.js', '--approvals', 'any');
   old(dir, 'plan', '--file', writeJson(path.dirname(dir), `compat-${path.basename(dir)}.json`, [
     { title: 'one', done: 'd', ui: false, tests: ['x'] },
@@ -290,7 +304,9 @@ test('a single-repo run recorded by the previous version carries on unchanged', 
   // Same diff, byte for byte, and the same since-review behaviour.
   assert.strictEqual(ok(dir, 'diff', 'CP1').out, old(dir, 'diff', 'CP1').out);
   assert.strictEqual(ok(dir, 'diff', 'CP1', '--since-review').out, old(dir, 'diff', 'CP1', '--since-review').out);
-  assert.match(ok(dir, 'advance', 'CP1', '--approved-by', 'h').out, /CP1 done/);
+  // The new version only accepts viewer approvals, whatever the old run.json says.
+  assert.throws(() => core.advance(core.resolvePaths(dir), 'CP1', { by: 'h', source: 'cli' }), /checkpoint approval may only be recorded by the viewer/);
+  viewerApproveCp(dir, 'CP1');
   commitAll(dir, 'cp1');
   ok(dir, 'begin', 'CP2');
   const run = JSON.parse(fs.readFileSync(path.join(dir, '.theseus', 'current', 'run.json'), 'utf8'));

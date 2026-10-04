@@ -1,9 +1,6 @@
 'use strict';
 
-/**
- * The brief: the agent's understanding, confirmed by the human before any
- * deep research or planning.
- */
+/** Requirements discovery briefs are complete, resolved, and viewer-approved. */
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -27,20 +24,17 @@ function theseus(dir, ...args) {
   const r = spawnSync(process.execPath, [SCRIPT, ...args], { cwd: dir, encoding: 'utf8', env: env() });
   return { code: r.status, out: r.stdout, err: r.stderr };
 }
-
 function ok(dir, ...args) {
   const r = theseus(dir, ...args);
   assert.strictEqual(r.code, 0, `theseus ${args.join(' ')} failed: ${r.err}`);
   return r;
 }
-
 function refused(dir, pattern, ...args) {
   const r = theseus(dir, ...args);
-  assert.strictEqual(r.code, 1, `expected theseus ${args.join(' ')} to fail, got ${r.code}: ${r.out}`);
+  assert.strictEqual(r.code, 1, `expected refusal: ${r.out}`);
   assert.match(r.err, pattern);
   return r;
 }
-
 function file(dir, name, value) {
   const full = path.join(path.dirname(dir), `${name}-${path.basename(dir)}.json`);
   fs.writeFileSync(full, JSON.stringify(value));
@@ -48,12 +42,23 @@ function file(dir, name, value) {
 }
 
 const BRIEF = {
-  goal: 'Port the leave request screen to SwiftUI',
-  understanding: 'Rebuild the RN screen with identical behaviour',
-  areas: ['balance rule', 'form states', 'manager approval'],
-  out_of_scope: ['the calendar view'],
-  questions: ['keep the half-day option?'],
+  task: 'Port the leave request screen to SwiftUI',
+  goal: 'Deliver the leave-request workflow with the agreed behavior.',
+  change_type: 'feature',
+  expected_behavior: 'People can submit a valid leave request and understand invalid states.',
+  acceptance_criteria: ['A valid request is accepted.', 'Invalid dates explain how to correct them.'],
+  user_proposed_approach: 'Copy the React Native component structure in SwiftUI.',
+  reviewed_approach: 'The legacy component couples validation and display state.',
+  recommended_approach: 'Extract the validation model, then render it in SwiftUI.',
+  approach_rationale: 'It preserves behavior while fitting the project convention.',
+  checkpoint_areas: ['balance rule', 'form states', 'manager approval'],
+  scope_boundaries: ['Do not change the calendar view.'],
+  assumptions: [],
+  risks: ['The legacy half-day rule needs regression coverage.'],
+  resolved_decisions: ['Keep the existing half-day behavior.'],
+  unresolved_questions: [],
 };
+const BUG_BRIEF = { ...BRIEF, task: 'Fix leave validation message', change_type: 'bug', current_behavior: 'A request beyond the balance is accepted without an error.' };
 const PLAN = [{ title: 'Balance rule', done: 'd', ui: false, tests: ['t'] }];
 
 function run(extra = []) {
@@ -63,56 +68,67 @@ function run(extra = []) {
   return dir;
 }
 
-test('plan is refused until the brief is confirmed, and works after', () => {
+test('planning is blocked until a viewer-confirmed requirements brief exists', () => {
   const dir = run();
-  assert.match(ok(dir, 'status').out, /next: write the brief \(light recon only — no deep research yet\): theseus\.js brief --file F/);
+  assert.match(ok(dir, 'status').out, /finish requirements discovery in chat/);
+  refused(dir, /finish and submit the requirements brief/, 'serve');
   refused(dir, /confirm the brief first/, 'plan', '--file', file(dir, 'plan', PLAN));
-  assert.match(ok(dir, 'brief', '--file', file(dir, 'brief', BRIEF)).out, /brief saved \(3 area\(s\)\) — the human confirms it or asks for changes in the viewer/);
-  assert.match(ok(dir, 'status').out, /next: human confirms the brief in the viewer; agent runs: theseus\.js wait/);
-  refused(dir, /confirm the brief first/, 'plan', '--file', file(dir, 'plan', PLAN));
-  refused(dir, /approve in the viewer/, 'approve-brief', '--by', 'me');
+  assert.match(ok(dir, 'brief', '--file', file(dir, 'brief', BRIEF)).out, /requirements brief saved/);
+  assert.match(ok(dir, 'status').out, /human confirms the requirements brief in the viewer/);
   core.approveBrief(core.resolvePaths(dir), { by: 'human (viewer)', source: 'viewer' });
   ok(dir, 'plan', '--file', file(dir, 'plan', PLAN));
-  const stored = JSON.parse(ok(dir, 'status', '--json', '--full').out).run.brief;
-  assert.deepStrictEqual([stored.status, stored.areas, stored.out_of_scope, stored.confirmedBy.source], ['confirmed', BRIEF.areas, ['the calendar view'], 'viewer']);
 });
 
-test('a brief without goal, understanding or areas is refused', () => {
-  const dir = run();
-  refused(dir, /the brief has no 'goal'/, 'brief', '--file', file(dir, 'b1', { understanding: 'u', areas: ['a'] }));
-  refused(dir, /the brief has no 'understanding'/, 'brief', '--file', file(dir, 'b2', { goal: 'g', areas: ['a'] }));
-  refused(dir, /the brief has no 'areas' — list what you will create checkpoints for/, 'brief', '--file', file(dir, 'b3', { goal: 'g', understanding: 'u', areas: [] }));
+test('feature and bug briefs enforce the requirements schema', () => {
+  const feature = run();
+  ok(feature, 'brief', '--file', file(feature, 'feature', BRIEF));
+  const bug = run();
+  ok(bug, 'brief', '--file', file(bug, 'bug', BUG_BRIEF));
+  const cases = [
+    [/has no 'acceptance_criteria'/, { ...BRIEF, acceptance_criteria: [] }],
+    [/has no 'reviewed_approach'/, (() => { const b = { ...BRIEF }; delete b.reviewed_approach; return b; })()],
+    [/has no 'current_behavior'/, (() => { const b = { ...BUG_BRIEF }; delete b.current_behavior; return b; })()],
+    [/has unresolved questions/, { ...BRIEF, unresolved_questions: ['Which endpoint should we use?'] }],
+  ];
+  for (const [message, value] of cases) {
+    const dir = run();
+    refused(dir, message, 'brief', '--file', file(dir, 'invalid', value));
+  }
 });
 
-test('requested changes send the brief back to draft and into the inbox; a new brief resets it', () => {
+test('viewer renders, requests changes on, and approves the richer requirements brief', async () => {
   const dir = run();
+  ok(dir, 'brief', '--file', file(dir, 'brief', BUG_BRIEF));
+  const server = await startServer(core.resolvePaths(dir), { port: 0 });
+  const post = (route, body) => fetch(`http://127.0.0.1:${server.port}${route}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-theseus-token': server.token }, body: JSON.stringify(body || {}) });
+  try {
+    const page = await (await fetch(`http://127.0.0.1:${server.port}/?t=${server.token}`)).text();
+    assert.match(page, /Requirements brief/);
+    assert.match((await (await post('/api/feedback', { brief: true, text: 'add an acceptance criterion' })).json()).message, /Changes requested on the brief/);
+    ok(dir, 'brief', '--file', file(dir, 'brief2', BUG_BRIEF));
+    assert.match((await (await post('/api/approve-brief')).json()).message, /Requirements brief approved/);
+  } finally { await server.close(); }
+});
+
+test('CLI approval commands and approval mode are removed', () => {
+  const dir = run();
+  refused(dir, /--approvals has been removed/, 'config', '--approvals', 'any');
+  refused(dir, /--autonomy unattended is unavailable at initialization/, 'init', '--key', 'other', '--reference', 'r', '--test-cmd', 'c', '--autonomy', 'unattended');
+  assert.match(theseus(dir, 'approve-brief', '--by', 'h').out, /usage:/);
+  assert.match(theseus(dir, 'approve-plan', '--by', 'h').out, /usage:/);
+});
+
+test('unattended autonomy is viewer-only after brief approval', () => {
+  const dir = run();
+  refused(dir, /unattended autonomy can only be enabled in the viewer/, 'config', '--autonomy', 'unattended');
   ok(dir, 'brief', '--file', file(dir, 'brief', BRIEF));
-  core.addFeedback(core.resolvePaths(dir), { brief: true, text: 'you missed the notifications' });
-  assert.match(ok(dir, 'status').out, /next: revise the brief from the human's feedback/);
-  assert.match(ok(dir, 'inbox').out, /you missed the notifications/);
-  assert.throws(() => core.approveBrief(core.resolvePaths(dir), { by: 'h', source: 'viewer' }), /the brief has changes requested/);
-  ok(dir, 'brief', '--file', file(dir, 'brief2', { ...BRIEF, areas: [...BRIEF.areas, 'notifications'] }));
-  assert.strictEqual(JSON.parse(ok(dir, 'status', '--json', '--full').out).run.brief.status, 'pending');
+  assert.throws(() => core.setSettings(core.resolvePaths(dir), { autonomy: 'unattended' }, { source: 'viewer' }), /confirm the requirements brief/);
+  core.approveBrief(core.resolvePaths(dir), { by: 'human (viewer)', source: 'viewer' });
+  core.setSettings(core.resolvePaths(dir), { autonomy: 'unattended' }, { source: 'viewer' });
+  assert.strictEqual(JSON.parse(ok(dir, 'status', '--json').out).run.autonomy, 'unattended');
 });
 
-test('once checkpoints exist, a new brief is refused', () => {
-  const dir = run(['--approvals', 'any']);
-  ok(dir, 'brief', '--file', file(dir, 'brief', BRIEF));
-  ok(dir, 'approve-brief', '--by', 'h');
-  ok(dir, 'plan', '--file', file(dir, 'plan', PLAN));
-  refused(dir, /the checkpoints are already planned — change direction through feedback and theseus\.js add/, 'brief', '--file', file(dir, 'brief', BRIEF));
-});
-
-test('a run made before briefs existed plans without one', () => {
-  const dir = run();
-  const runFile = path.join(dir, '.theseus', 'current', 'run.json');
-  const data = JSON.parse(fs.readFileSync(runFile, 'utf8'));
-  delete data.briefRequired;
-  fs.writeFileSync(runFile, JSON.stringify(data));
-  ok(dir, 'plan', '--file', file(dir, 'plan', PLAN));
-});
-
-test('wait wakes when the human confirms the brief', async () => {
+test('wait wakes when the viewer confirms the requirements brief', async () => {
   const dir = run();
   ok(dir, 'brief', '--file', file(dir, 'brief', BRIEF));
   const waiting = spawn(process.execPath, [SCRIPT, 'wait', '--timeout', '20'], { cwd: dir, env: env() });
@@ -122,26 +138,4 @@ test('wait wakes when the human confirms the brief', async () => {
   core.approveBrief(core.resolvePaths(dir), { by: 'human (viewer)', source: 'viewer' });
   assert.strictEqual(await new Promise(resolve => waiting.on('exit', resolve)), 0);
   assert.match(out, /brief confirmed — now do the research and plan the checkpoints/);
-  assert.match(out, /next: plan the checkpoints/);
-});
-
-test('the viewer confirms the brief or requests changes on it', async () => {
-  const dir = run();
-  ok(dir, 'brief', '--file', file(dir, 'brief', BRIEF));
-  const server = await startServer(core.resolvePaths(dir), { port: 0 });
-  const post = (route, body) => fetch(`http://127.0.0.1:${server.port}${route}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-theseus-token': server.token },
-    body: JSON.stringify(body || {}),
-  });
-  try {
-    assert.match((await (await post('/api/feedback', { brief: true, text: 'add notifications' })).json()).message, /Changes requested on the brief/);
-    ok(dir, 'brief', '--file', file(dir, 'brief2', BRIEF));
-    assert.match((await (await post('/api/approve-brief')).json()).message, /Brief confirmed — the agent can now research and plan/);
-    const again = await post('/api/approve-brief');
-    assert.strictEqual(again.status, 409);
-    assert.match((await again.json()).error, /the brief is already confirmed/);
-  } finally {
-    await server.close();
-  }
 });

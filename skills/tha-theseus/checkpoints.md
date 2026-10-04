@@ -3,10 +3,16 @@
 The brief for the `theseus-planner` subagent: it plans the checkpoints and their tests. The output is a JSON
 array that `theseus plan --file` loads.
 
-You are also given the run's **confirmed brief**. The human agreed to it, so every item
-in its `areas` must be covered by at least one checkpoint. If one can't be, say which
-and why, rather than dropping it silently. Anything in `out_of_scope` gets no
-checkpoint.
+You are also given the viewer-approved **requirements brief**. The human agreed to it,
+so every item in its `checkpoint_areas` and `acceptance_criteria` must be covered by
+at least one checkpoint. If one cannot be, say which and why rather than dropping it
+silently. Respect its `scope_boundaries`, `assumptions`, `risks`, and
+`resolved_decisions`; unresolved questions are never permitted in a submitted brief.
+
+You are dispatched only after viewer approval. Do not reopen requirements discovery,
+create implementation code, or substitute your own approval for a missing decision;
+return a targeted question to the orchestrator if the approved brief and reference
+materially conflict.
 
 ## What a checkpoint is
 

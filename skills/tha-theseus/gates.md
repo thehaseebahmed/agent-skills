@@ -133,14 +133,10 @@ on your own authority.
 | `batch:N` | succeeds while approval credit remains from the human's last approval; otherwise stops |
 | `unattended` | succeeds; approval is recorded as deferred to PR review |
 
-**Where the approval comes from:**
-- **`--approvals viewer` (default):** the human clicks **Approve** in the viewer,
-  which already shows the test output, the reviewers' notes and, for UI checkpoints,
-  the paired screenshots. The agent runs `theseus wait`. Approvals typed on the CLI
-  are refused.
-- **`--approvals any`:** the human may approve in chat instead, recorded with
-  `advance CP --approved-by NAME`. These are marked "reported by agent".
-- **The viewer re-checks every gate at the current code before approving.** A
+**Where the approval comes from:** the human clicks **Approve** in the viewer, which
+already shows the test output, the reviewers' notes and, for UI checkpoints, the
+paired screenshots. The agent runs `theseus wait`; CLI approval commands and flags
+are unavailable. **The viewer re-checks every gate at the current code before approving.** A
   checkpoint whose code changed after review cannot be approved there either.
 
 Their feedback is distilled into the learnings either way. Change requests become new

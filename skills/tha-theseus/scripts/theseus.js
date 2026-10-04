@@ -35,7 +35,6 @@ const LOG_LIMIT = 200;
 const DEFAULT_PORT = 4747;
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const AUTONOMY = /^(step|unattended|batch:[1-9]\d*)$/;
-const APPROVALS = ['viewer', 'any'];
 const GRANULARITY = ['xs-s', 's-m'];
 const DEFAULT_GRANULARITY = 's-m';
 const LEARNINGS_COMPACT_AT = 40;
@@ -47,19 +46,17 @@ const IMAGE_TYPES = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image
 const USAGE = `usage: theseus.js <command> [args]
 
   init --key K --reference R --test-cmd C [--arch a.md,b.md]
-       [--autonomy step|batch:N|unattended] [--approvals viewer|any] [--granularity xs-s|s-m]
+       [--autonomy step|batch:N] [--granularity xs-s|s-m]
        [--visual on|off] [--reviewers 0|1|2]
   init … --repos api,web[,name=path] [--test-cmd-<name> C]
                                       one run across several repos (from the folder holding them)
-  config [--autonomy …] [--approvals …] [--granularity …] [--visual on|off] [--reviewers 0|1|2]
-                                      change settings mid-run (the CLI may only tighten under --approvals viewer)
+  config [--autonomy …] [--granularity …] [--visual on|off] [--reviewers 0|1|2]
+                                      change agent-side settings; approvals are always made in the viewer
   serve [--port ${DEFAULT_PORT}]            start the live viewer in the background; prints its link
   stop                                stop the viewer
   plan --file checkpoints.json        load the checkpoint list (replaces an unstarted plan)
   add --file checkpoints.json         append checkpoints, e.g. from human feedback
-  brief --file brief.json             what the agent understood; the human confirms it before any planning
-  approve-brief --by NAME             CLI brief confirmation (refused when --approvals viewer)
-  approve-plan --by NAME              CLI plan approval (refused when --approvals viewer)
+  brief --file brief.json             submit the completed requirements brief for viewer approval
   begin CP                            start a checkpoint (needs a clean tree)
   record CP red   [--cmd C]           run the tests; they must FAIL
   record CP tests [--cmd C]           gate 1: run the tests; they must pass
@@ -67,7 +64,7 @@ const USAGE = `usage: theseus.js <command> [args]
   record CP visual --skip "reason"    only for checkpoints with ui: false
   record CP visual --carry "reason"   re-use an earlier visual pass after a non-visual fix
   record CP review --reviewer ID --findings N [--isolation none] [--note T]
-  advance CP [--approved-by NAME]     gate 4 and mark done (--approved-by refused when --approvals viewer)
+  advance CP                          gate 4; viewer approval marks a checkpoint done
   diff CP [--since-review]            the checkpoint's diff for reviewers (or only what changed since the last review)
   wait [--timeout 540]                block until the human approves or sends feedback in the viewer
   inbox                               print unread feedback from the viewer and mark it read
@@ -81,8 +78,8 @@ const USAGE = `usage: theseus.js <command> [args]
   check                               for a Stop hook: exit 2 while gates are open
   runs [--json]                       every run: active, paused and closed
   switch KEY                          make another open run active (only between checkpoints)
-  complete [--approved-by NAME]       finish the run once every checkpoint is done; the human confirms
-  abandon --reason R [--approved-by NAME]
+  complete                            finish the run once every checkpoint is done; the human confirms
+  abandon --reason R
                                       stop the run early; the human confirms
   status --run KEY / diff --run KEY   read another run without switching
   archive                             older name for complete`;
@@ -572,13 +569,6 @@ function requireActive(cp) {
   }
 }
 
-/** CLI approvals are refused when the human chose to approve only in the viewer. */
-function assertCliMayApprove(run) {
-  if (run.approvals === 'viewer') {
-    fail('approve in the viewer — this run only accepts approvals the human clicks there (theseus.js serve prints the link). Ask the human, then run: theseus.js wait');
-  }
-}
-
 // ── runs: the active one in current/, paused ones in runs/, closed ones in archive/ ──
 
 const CLOSING = { completing: 'complete', abandoning: 'abandoned' };
@@ -699,12 +689,13 @@ function runSummary(p, run, state, final) {
   const events = readLog(p);
   const verdicts = gate => events.filter(e => e.event === 'gate' && e.gate === gate && e.reviewer);
   const findings = list => list.reduce((n, e) => n + (parseInt(e.result, 10) || 0), 0);
-  const approvals = { viewer: 0, agent: 0, deferred: 0 };
+  const approvals = { viewer: 0, deferred: 0 };
   for (const cp of state.checkpoints) {
     if (!cp.approval) continue;
+    // A legacy run may carry CLI-reported approvals; the summary no longer
+    // breaks them out — future approvals are always clicked in the viewer.
     if (cp.approval.deferred) approvals.deferred += 1;
-    else if (cp.approval.source === 'viewer') approvals.viewer += 1;
-    else approvals.agent += 1;
+    else approvals.viewer += 1;
   }
   const finished = new Date();
   const started = run.created ? new Date(run.created) : null;
@@ -728,10 +719,9 @@ function runSummary(p, run, state, final) {
 
 /**
  * Ask to close the active run. `kind` is 'complete' (every checkpoint done)
- * or 'abandon' (any time, with a reason). It waits on the human unless an
- * approver is given, which only `approvals: any` allows.
+ * or 'abandon' (any time, with a reason). It always waits on the viewer.
  */
-function requestClose(p, kind, { reason = null, source, by = null }) {
+function requestClose(p, kind, { reason = null, source }) {
   const { run, state } = loadRun(p);
   assertOpen(run);
   if (kind === 'complete' && (state.checkpoints.length === 0 || state.checkpoints.some(c => c.status !== 'done'))) {
@@ -742,7 +732,6 @@ function requestClose(p, kind, { reason = null, source, by = null }) {
   if (kind === 'abandon') run.closeReason = reason.trim();
   save(p, run, state);
   log(p, kind === 'complete' ? 'completion-requested' : 'abandon-requested', { source, reason: run.closeReason || null });
-  if (by) return closeRun(p, 'confirm', { source, by });
   return { waiting: true, status: run.status };
 }
 
@@ -776,6 +765,7 @@ function closeRun(p, decision, { source, by }) {
 // ── operations shared by the CLI and the viewer ──────────────────────────────
 
 function approvePlan(p, { by, source }) {
+  if (source !== 'viewer') fail('plan approval may only be recorded by the viewer');
   const { run, state } = loadRun(p);
   const pending = state.checkpoints.filter(c => !c.approved);
   if (pending.length === 0) fail('nothing to approve — every checkpoint is already approved');
@@ -794,6 +784,7 @@ function approvePlan(p, { by, source }) {
  * on a human.
  */
 function advance(p, cpId, { by = null, source = 'cli' } = {}) {
+  if (by && source !== 'viewer') fail('checkpoint approval may only be recorded by the viewer');
   const { run, state } = loadRun(p);
   const cp = findCheckpoint(state, cpId);
   requireActive(cp);
@@ -814,9 +805,16 @@ function advance(p, cpId, { by = null, source = 'cli' } = {}) {
       run.lastApprover = { by, source };
     }
   } else if (run.autonomy.startsWith('batch:') && run.approvalCredit > 0) {
-    run.approvalCredit -= 1;
-    approval = { ...run.lastApprover, batch: true };
-  } else {
+    // Batch credit a previous version granted against a CLI-reported approval is
+    // no longer trusted; only credit backed by a viewer click carries forward.
+    if (!run.lastApprover || run.lastApprover.source !== 'viewer') {
+      run.approvalCredit = 0;
+    } else {
+      run.approvalCredit -= 1;
+      approval = { ...run.lastApprover, batch: true };
+    }
+  }
+  if (!approval) {
     if (cp.status !== 'awaiting-approval') {
       cp.status = 'awaiting-approval';
       save(p, run, state);
@@ -838,7 +836,6 @@ function advance(p, cpId, { by = null, source = 'cli' } = {}) {
 function settingsOf(run) {
   return {
     autonomy: run.autonomy,
-    approvals: run.approvals,
     granularity: run.granularity || DEFAULT_GRANULARITY,
     visual: run.visual || 'on',
     reviewers: run.reviewers === undefined ? '2' : String(run.reviewers),
@@ -854,36 +851,37 @@ function autonomyLooseness(autonomy) {
 
 function validateSettings(changes) {
   if (changes.autonomy !== undefined && !AUTONOMY.test(changes.autonomy)) fail(`autonomy must be step, batch:N or unattended, not '${changes.autonomy}'`);
-  if (changes.approvals !== undefined && !APPROVALS.includes(changes.approvals)) fail(`approvals must be viewer or any, not '${changes.approvals}'`);
   if (changes.granularity !== undefined && !GRANULARITY.includes(changes.granularity)) fail(`granularity must be xs-s or s-m, not '${changes.granularity}'`);
   if (changes.visual !== undefined && !VISUAL.includes(changes.visual)) fail(`visual must be on or off, not '${changes.visual}'`);
   if (changes.reviewers !== undefined && !REVIEWER_COUNTS.includes(changes.reviewers)) fail(`reviewers must be 0, 1 or 2, not '${changes.reviewers}'`);
 }
 
 /**
- * Change settings mid-run. The human (viewer) may change anything. Under
- * `approvals: viewer` the CLI may only tighten, so an agent cannot relax the
- * rules it is being held to.
+ * Change settings mid-run. The viewer controls any relaxation. The agent may
+ * only tighten the review cadence and may never enable unattended autonomy.
  */
 function setSettings(p, changes, { source }) {
   const picked = {};
-  for (const key of ['autonomy', 'approvals', 'granularity', 'visual', 'reviewers']) {
+  for (const key of ['autonomy', 'granularity', 'visual', 'reviewers']) {
     const value = typeof changes[key] === 'number' ? String(changes[key]) : changes[key];
     if (typeof value === 'string' && value.trim()) picked[key] = value.trim();
   }
-  if (Object.keys(picked).length === 0) fail('give at least one of autonomy, approvals, granularity, visual or reviewers');
+  if (Object.keys(picked).length === 0) fail('give at least one of autonomy, granularity, visual or reviewers');
   validateSettings(picked);
   const { run, state } = loadRun(p);
   const before = settingsOf(run);
   const after = { ...before, ...picked };
   const changed = Object.keys(after).filter(k => after[k] !== before[k]);
   if (changed.length === 0) fail('nothing changed — those are already the settings');
-  if (source === 'cli' && before.approvals === 'viewer') {
-    const loosens = after.approvals === 'any'
-      || autonomyLooseness(after.autonomy) > autonomyLooseness(before.autonomy)
+  if (after.autonomy === 'unattended') {
+    if (source !== 'viewer') fail('unattended autonomy can only be enabled in the viewer after the requirements brief is confirmed');
+    if (!run.brief || run.brief.status !== 'confirmed') fail('confirm the requirements brief in the viewer before enabling unattended autonomy');
+  }
+  if (source === 'cli') {
+    const loosens = autonomyLooseness(after.autonomy) > autonomyLooseness(before.autonomy)
       || (after.visual === 'off' && before.visual === 'on')
       || Number(after.reviewers) < Number(before.reviewers);
-    if (loosens) fail('loosen settings in the viewer — under approvals: viewer the CLI may only make autonomy, approvals or reviews stricter. Ask the human to change it there.');
+    if (loosens) fail('loosen settings in the viewer — the CLI may only make autonomy or reviews stricter.');
   }
   Object.assign(run, after);
   if (changed.includes('autonomy')) run.approvalCredit = 0;
@@ -918,25 +916,42 @@ function readFeedback(p) {
   return readJson(p.feedback, { items: [] });
 }
 
-const BRIEF_LISTS = ['in_scope', 'out_of_scope', 'assumptions', 'questions'];
+const BRIEF_LISTS = ['acceptance_criteria', 'checkpoint_areas', 'scope_boundaries', 'assumptions', 'risks', 'resolved_decisions', 'unresolved_questions'];
 
-/** Validate the agent's brief: what it understood, and what it will make checkpoints for. */
+/** Validate the completed requirements conversation before it reaches the viewer. */
 function normalizeBrief(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail('the brief must be a JSON object');
-  const text = key => (typeof input[key] === 'string' && input[key].trim() ? input[key].trim() : null);
-  const list = key => (Array.isArray(input[key]) ? input[key].filter(x => typeof x === 'string' && x.trim()).map(x => x.trim()) : []);
+  const text = key => {
+    if (typeof input[key] !== 'string' || !input[key].trim()) fail(`the brief has no '${key}' — complete the requirements conversation before submitting it`);
+    return input[key].trim();
+  };
+  const list = (key, required = false) => {
+    if (!Array.isArray(input[key])) fail(`the brief has no '${key}' list — include it even when it is empty`);
+    const values = input[key].filter(x => typeof x === 'string' && x.trim()).map(x => x.trim());
+    if (required && values.length === 0) fail(`the brief has no '${key}' — include at least one item`);
+    return values;
+  };
+  const task = text('task');
   const goal = text('goal');
-  if (!goal) fail("the brief has no 'goal' — say in a sentence or two what this run should achieve");
-  const understanding = text('understanding');
-  if (!understanding) fail("the brief has no 'understanding' — say in plain words what you believe is being asked");
-  const areas = list('areas');
-  if (areas.length === 0) fail("the brief has no 'areas' — list what you will create checkpoints for, so the human can check nothing is missing");
-  const brief = { goal, understanding, areas };
-  for (const key of BRIEF_LISTS) brief[key] = list(key);
+  const change_type = text('change_type');
+  if (!['feature', 'bug'].includes(change_type)) fail("the brief 'change_type' must be 'feature' or 'bug'");
+  const expected_behavior = text('expected_behavior');
+  const user_proposed_approach = text('user_proposed_approach');
+  const reviewed_approach = text('reviewed_approach');
+  const recommended_approach = text('recommended_approach');
+  const approach_rationale = text('approach_rationale');
+  const brief = { task, goal, change_type, expected_behavior, user_proposed_approach, reviewed_approach, recommended_approach, approach_rationale };
+  if (change_type === 'bug') brief.current_behavior = text('current_behavior');
+  else if (typeof input.current_behavior === 'string' && input.current_behavior.trim()) brief.current_behavior = input.current_behavior.trim();
+  brief.acceptance_criteria = list('acceptance_criteria', true);
+  brief.checkpoint_areas = list('checkpoint_areas', true);
+  for (const key of ['scope_boundaries', 'assumptions', 'risks', 'resolved_decisions', 'unresolved_questions']) brief[key] = list(key);
+  if (brief.unresolved_questions.length) fail("the brief has unresolved questions — resolve them or record an explicit user-approved assumption before submitting it");
   return brief;
 }
 
 function approveBrief(p, { by, source }) {
+  if (source !== 'viewer') fail('brief approval may only be recorded by the viewer');
   const { run, state } = loadRun(p);
   assertOpen(run);
   if (!run.brief) fail('there is no brief to confirm yet — the agent writes it with: theseus.js brief --file F');
@@ -986,17 +1001,14 @@ function readLearnings(p) {
 }
 
 function nextAction(p, state, run) {
-  const viewer = run && run.approvals === 'viewer';
   if (run && ['completed', 'abandoned'].includes(runStatus(run))) return `run ${run.key} is ${runStatus(run)} — nothing left to do; it stays in History`;
   if (run && CLOSING[runStatus(run)]) {
     return `human confirms the run ${CLOSING[runStatus(run)]} in the viewer (or keeps it open); agent runs: theseus.js wait`;
   }
   if (run && run.briefRequired && state.checkpoints.length === 0) {
-    if (!run.brief) return 'write the brief (light recon only — no deep research yet): theseus.js brief --file F';
+    if (!run.brief) return 'finish requirements discovery in chat (task, behaviour, approach and open decisions), then: theseus.js brief --file F';
     if (run.brief.status === 'draft') return 'revise the brief from the human\'s feedback (theseus.js inbox), then: theseus.js brief --file F';
-    if (run.brief.status === 'pending') {
-      return viewer ? 'human confirms the brief in the viewer; agent runs: theseus.js wait' : 'get the human to confirm the brief: theseus.js approve-brief --by NAME';
-    }
+    if (run.brief.status === 'pending') return 'human confirms the requirements brief in the viewer; agent runs: theseus.js wait';
   }
   if (state.checkpoints.length === 0) return 'plan the checkpoints: theseus.js plan --file F';
   const active = state.checkpoints.find(isActive);
@@ -1005,7 +1017,7 @@ function nextAction(p, state, run) {
       if (run && (run.autonomy === 'unattended' || (run.autonomy.startsWith('batch:') && run.approvalCredit > 0))) {
         return `autonomy no longer needs a human here: theseus.js advance ${active.id}`;
       }
-      return viewer ? `human approves ${active.id} in the viewer; agent runs: theseus.js wait` : `get human approval: theseus.js advance ${active.id} --approved-by NAME`;
+      return `human approves ${active.id} in the viewer; agent runs: theseus.js wait`;
     }
     const s = gateStates(p, active, fingerprint(p, active));
     if (s.red !== 'pass') return `write failing tests: theseus.js record ${active.id} red`;
@@ -1024,7 +1036,7 @@ function nextAction(p, state, run) {
   const next = state.checkpoints.find(c => c.status === 'pending');
   if (next && !next.approved) {
     const ids = state.checkpoints.filter(c => !c.approved).map(c => c.id).join(', ');
-    return viewer ? `human approves the plan (${ids}) in the viewer; agent runs: theseus.js wait` : `human approval of ${ids}: theseus.js approve-plan --by NAME`;
+    return `human approves the plan (${ids}) in the viewer; agent runs: theseus.js wait`;
   }
   if (next) return `theseus.js begin ${next.id}`;
   return 'every checkpoint is done: the human reviews the whole feature, then theseus.js complete';
@@ -1058,7 +1070,6 @@ function snapshot(p) {
     warnings: {
       isolationNone: checkpoints.filter(c => c.isolationNone).map(c => c.id),
       deferredApprovals: checkpoints.filter(c => c.approval && c.approval.deferred).map(c => c.id),
-      cliApprovals: checkpoints.filter(c => c.approval && c.approval.source === 'cli').map(c => c.id),
     },
   };
 }
@@ -1133,8 +1144,8 @@ function cmdInit(cwd, { flags }) {
   }
   const autonomy = stringFlag(flags, 'autonomy') || 'step';
   if (!AUTONOMY.test(autonomy)) fail(`--autonomy must be step, batch:N or unattended, not '${autonomy}'`);
-  const approvals = stringFlag(flags, 'approvals') || 'viewer';
-  if (!APPROVALS.includes(approvals)) fail(`--approvals must be viewer or any, not '${approvals}'`);
+  if (autonomy === 'unattended') fail('--autonomy unattended is unavailable at initialization — the human may enable it in the viewer after approving the requirements brief');
+  if (flags.approvals !== undefined) fail('--approvals has been removed — all approvals are made in the viewer');
   const granularity = stringFlag(flags, 'granularity') || DEFAULT_GRANULARITY;
   if (!GRANULARITY.includes(granularity)) fail(`--granularity must be xs-s or s-m, not '${granularity}'`);
   const visual = stringFlag(flags, 'visual') || 'on';
@@ -1147,7 +1158,6 @@ function cmdInit(cwd, { flags }) {
     testCmd: requireFlag(flags, 'test-cmd', 'the command that runs the tests'),
     arch: stringFlag(flags, 'arch') ? flags.arch.split(',').map(s => s.trim()).filter(Boolean) : [],
     autonomy,
-    approvals,
     granularity,
     visual,
     reviewers,
@@ -1164,12 +1174,11 @@ function cmdInit(cwd, { flags }) {
   const ignore = path.join(p.base, '.gitignore');
   if (!fs.existsSync(ignore)) fs.writeFileSync(ignore, 'server.json\nserver.log\n*.tmp\n');
   save(p, run, { checkpoints: [] });
-  log(p, 'init', { key: run.key, autonomy, approvals, granularity });
-  console.log(`theseus: run '${run.key}' started in ${path.relative(cwd, p.base) || p.base} (autonomy: ${autonomy}, approvals: ${approvals}, checkpoint size: ${granularity})`);
+  log(p, 'init', { key: run.key, autonomy, granularity });
+  console.log(`theseus: run '${run.key}' started in ${path.relative(cwd, p.base) || p.base} (autonomy: ${autonomy}, checkpoint size: ${granularity})`);
   if (repos) console.log(`theseus: repos in this run: ${repos.map(x => `${x.name} (${x.path})`).join(', ')} — every gate covers all of them`);
   if (paused) console.log(`theseus: run '${paused}' is paused; resume it later with: theseus.js switch ${paused}`);
-  console.log('theseus: start the viewer and give the human its link: theseus.js serve');
-  console.log('theseus: next, light recon only, then write the brief for the human to confirm: theseus.js brief --file F');
+  console.log('theseus: conduct the requirements conversation inline; inspect relevant code and standards, resolve material questions, then submit the brief: theseus.js brief --file F');
 }
 
 function cmdBrief(p, { flags }) {
@@ -1179,16 +1188,8 @@ function cmdBrief(p, { flags }) {
   const brief = normalizeBrief(readJson(requireFlag(flags, 'file')));
   run.brief = { ...brief, status: 'pending', submitted: new Date().toISOString() };
   save(p, run, state);
-  log(p, 'brief-submitted', { areas: brief.areas.length });
-  console.log(`theseus: brief saved (${brief.areas.length} area(s)) — the human confirms it or asks for changes in the viewer. No deep research or planning until then.`);
-}
-
-function cmdApproveBrief(p, { flags }) {
-  const { run } = loadRun(p);
-  assertCliMayApprove(run);
-  const by = requireFlag(flags, 'by', 'the human who confirmed the brief');
-  approveBrief(p, { by, source: 'cli' });
-  console.log(`theseus: brief confirmed by ${by} (reported by agent)`);
+  log(p, 'brief-submitted', { areas: brief.checkpoint_areas.length });
+  console.log(`theseus: requirements brief saved (${brief.checkpoint_areas.length} checkpoint area(s)). Start the viewer now and give the human its link: theseus.js serve`);
 }
 
 function cmdPlan(p, { flags }) {
@@ -1216,20 +1217,12 @@ function cmdAdd(p, { flags }) {
   console.log(`theseus: added ${added.map(c => c.id).join(', ')} at size ${settingsOf(run).granularity} — they need human approval before they begin`);
 }
 
-function cmdApprovePlan(p, { flags }) {
-  const { run } = loadRun(p);
-  assertCliMayApprove(run);
-  const by = requireFlag(flags, 'by', 'the human who reviewed the checkpoint list');
-  const ids = approvePlan(p, { by, source: 'cli' });
-  console.log(`theseus: ${ids.join(', ')} approved by ${by} (reported by agent)`);
-}
-
 function cmdBegin(p, { positionals }) {
   const { run, state } = loadRun(p);
   assertOpen(run);
   const cp = findCheckpoint(state, positionals[0]);
   if (cp.status !== 'pending') fail(`${cp.id} is already '${cp.status}'`);
-  if (!cp.approved) fail(`${cp.id} has not been approved by a human — they approve the plan in the viewer (or, with --approvals any: theseus.js approve-plan --by NAME)`);
+  if (!cp.approved) fail(`${cp.id} has not been approved by a human — they approve the plan in the viewer`);
   const active = state.checkpoints.find(isActive);
   if (active) fail(`${active.id} is still '${active.status}' — one checkpoint at a time`);
   const earlier = state.checkpoints.slice(0, state.checkpoints.indexOf(cp)).find(c => c.status !== 'done');
@@ -1384,14 +1377,10 @@ function cmdRecord(p, { positionals, flags }) {
 function cmdAdvance(p, { positionals, flags }) {
   const { run } = loadRun(p);
   assertOpen(run);
-  const by = stringFlag(flags, 'approved-by');
-  if (by) assertCliMayApprove(run);
-  const result = advance(p, positionals[0], { by, source: 'cli' });
+  if (flags['approved-by'] !== undefined) fail('--approved-by has been removed — approvals are made in the viewer');
+  const result = advance(p, positionals[0], { source: 'cli' });
   if (!result.done) {
-    const how = run.approvals === 'viewer'
-      ? 'Ask the human to approve it in the viewer, then: theseus.js wait'
-      : `Show the human the diff and evidence, then: theseus.js advance ${result.cp.id} --approved-by NAME`;
-    fail(`gates 1–3 passed for ${result.cp.id}; waiting for human approval (autonomy: ${run.autonomy}). ${how}`);
+    fail(`gates 1–3 passed for ${result.cp.id}; waiting for human approval (autonomy: ${run.autonomy}). Ask the human to approve it in the viewer, then: theseus.js wait`);
   }
   console.log(doneMessage(result));
 }
@@ -1399,7 +1388,7 @@ function cmdAdvance(p, { positionals, flags }) {
 function doneMessage({ cp, approval, next }) {
   const who = approval.deferred
     ? 'approval deferred to PR review'
-    : `approved by ${approval.by}${approval.source === 'cli' ? ', reported by agent' : ''}${approval.batch ? ', batch' : ''}`;
+    : `approved by ${approval.by}${approval.batch ? ', batch' : ''}`;
   return `theseus: ${cp.id} done (${who}). Commit it now.${next ? ` Next: ${next.id} '${next.title}'.` : ' That was the last checkpoint.'}`;
 }
 
@@ -1513,7 +1502,7 @@ function cmdStatus(p, { flags }) {
     return;
   }
   const settings = settingsOf(snap.run);
-  console.log(`theseus: ${snap.run.key} — autonomy ${settings.autonomy}, approvals ${settings.approvals}, checkpoint size ${settings.granularity}`);
+  console.log(`theseus: ${snap.run.key} — autonomy ${settings.autonomy}, approvals viewer-only, checkpoint size ${settings.granularity}`);
   if (settings.visual !== 'on' || settings.reviewers !== '2') {
     console.log(`  reviews: visual ${settings.visual}, code reviewers ${settings.reviewers}`);
   }
@@ -1523,7 +1512,6 @@ function cmdStatus(p, { flags }) {
   }
   const w = snap.warnings;
   if (w.isolationNone.length) console.log(`  WARNING: reviewed without context isolation: ${w.isolationNone.join(', ')}`);
-  if (w.cliApprovals.length) console.log(`  approval reported by agent, not clicked by a human: ${w.cliApprovals.join(', ')}`);
   if (w.deferredApprovals.length) console.log(`  approval deferred to PR review: ${w.deferredApprovals.join(', ')}`);
   if (isMulti(snap.run)) {
     console.log(`  repos: ${snap.run.repos.map(x => x.name).join(', ')}`);
@@ -1568,9 +1556,9 @@ function cmdDiff(p, { positionals, flags }) {
 }
 
 function cmdConfig(p, { flags }) {
-  const changes = setSettings(p, { autonomy: flags.autonomy, approvals: flags.approvals, granularity: flags.granularity, visual: flags.visual, reviewers: flags.reviewers }, { source: 'cli' });
-  const { run } = loadRun(p);
-  console.log(`theseus: settings changed — ${describeChanges(changes)}${run.approvals === 'any' ? ' (reported by agent)' : ''}`);
+  if (flags.approvals !== undefined) fail('--approvals has been removed — all approvals are made in the viewer');
+  const changes = setSettings(p, { autonomy: flags.autonomy, granularity: flags.granularity, visual: flags.visual, reviewers: flags.reviewers }, { source: 'cli' });
+  console.log(`theseus: settings changed — ${describeChanges(changes)}`);
 }
 
 /** Stop-hook entry point. Must never throw: a broken hook must not wedge a session. */
@@ -1606,16 +1594,14 @@ function closeMessage(result, key) {
 
 function cmdComplete(p, { flags }) {
   const { run } = loadRun(p);
-  const by = stringFlag(flags, 'approved-by');
-  if (by) assertCliMayApprove(run);
-  console.log(closeMessage(requestClose(p, 'complete', { source: 'cli', by }), run.key));
+  if (flags['approved-by'] !== undefined) fail('--approved-by has been removed — approvals are made in the viewer');
+  console.log(closeMessage(requestClose(p, 'complete', { source: 'cli' }), run.key));
 }
 
 function cmdAbandon(p, { flags }) {
   const { run } = loadRun(p);
-  const by = stringFlag(flags, 'approved-by');
-  if (by) assertCliMayApprove(run);
-  console.log(closeMessage(requestClose(p, 'abandon', { reason: stringFlag(flags, 'reason'), source: 'cli', by }), run.key));
+  if (flags['approved-by'] !== undefined) fail('--approved-by has been removed — approvals are made in the viewer');
+  console.log(closeMessage(requestClose(p, 'abandon', { reason: stringFlag(flags, 'reason'), source: 'cli' }), run.key));
 }
 
 /** The old way to finish a run. It now asks for completion, which the human confirms. */
@@ -1624,8 +1610,7 @@ function cmdArchive(p) {
   if (state.checkpoints.length === 0 || state.checkpoints.some(c => c.status !== 'done')) {
     fail('only a finished run can be archived — every checkpoint must be done');
   }
-  const by = run.approvals === 'any' ? 'agent (archive)' : null;
-  console.log(closeMessage(requestClose(p, 'complete', { source: 'cli', by }), run.key));
+  console.log(closeMessage(requestClose(p, 'complete', { source: 'cli' }), run.key));
 }
 
 function cmdSwitch(p, { positionals }) {
@@ -1679,7 +1664,8 @@ async function healthy(info) {
 }
 
 async function cmdServe(p, { flags }) {
-  loadRun(p);
+  const { run } = loadRun(p);
+  if (run.briefRequired && !run.brief) fail('finish and submit the requirements brief before starting the viewer: theseus.js brief --file F');
   const port = Number(stringFlag(flags, 'port') || DEFAULT_PORT);
   if (!Number.isInteger(port) || port < 0 || port > 65535) fail(`--port must be 0–65535, not '${flags.port}'`);
 
@@ -1849,14 +1835,12 @@ function cmdAgents(cwd, { flags }) {
 const COMMANDS = {
   plan: cmdPlan,
   add: cmdAdd,
-  'approve-plan': cmdApprovePlan,
   begin: cmdBegin,
   record: cmdRecord,
   advance: cmdAdvance,
   diff: cmdDiff,
   config: cmdConfig,
   brief: cmdBrief,
-  'approve-brief': cmdApproveBrief,
   complete: cmdComplete,
   abandon: cmdAbandon,
   switch: cmdSwitch,

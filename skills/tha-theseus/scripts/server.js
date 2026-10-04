@@ -5,8 +5,7 @@
  *
  * A local HTTP server (node:http, no dependencies) that shows the run as it
  * happens and is where the human approves. Every approval made here is
- * recorded with source "viewer", which is the only kind a run started with
- * `--approvals viewer` accepts.
+ * recorded with source "viewer". All Theseus approvals are made here.
  *
  * It binds to 127.0.0.1 only, and every API and evidence request must carry
  * the random token printed in the link, so another page open in the same
@@ -162,7 +161,7 @@ function startServer(p, { port = 0, token = crypto.randomBytes(16).toString('hex
       if (req.method === 'POST' && route === '/api/approve-brief') {
         approveBrief(p, { by: 'human (viewer)', source: 'viewer' });
         broadcast(true);
-        return send(res, 200, { ok: true, message: 'Brief confirmed — the agent can now research and plan the checkpoints.' });
+        return send(res, 200, { ok: true, message: 'Requirements brief approved — the agent can now plan the checkpoints.' });
       }
       if (req.method === 'POST' && route === '/api/switch') {
         const body = await readBody(req);

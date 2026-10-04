@@ -13,6 +13,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const SCRIPT = path.join(__dirname, 'theseus.js');
+const { requirementsBrief } = require('./brief-fixture');
 const core = require('./theseus');
 const { startServer } = require('./server');
 
@@ -37,7 +38,7 @@ function ok(dir, ...args) {
 /** Every run started by this version needs a confirmed brief before it can plan. */
 function confirmBrief(dir) {
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'theseus-brief-')), 'brief.json');
-  fs.writeFileSync(file, JSON.stringify({ goal: 'g', understanding: 'u', areas: ['a'] }));
+  fs.writeFileSync(file, JSON.stringify(requirementsBrief()));
   ok(dir, 'brief', '--file', file);
   const core = require('./theseus');
   core.approveBrief(core.resolvePaths(dir), { by: 'human (viewer)', source: 'viewer' });
@@ -56,13 +57,13 @@ function git(dir, ...args) {
 }
 
 /** A repo with one UI checkpoint begun; `init` takes the extra flags. */
-function started(extra = [], { approvals = 'any' } = {}) {
+function started(extra = []) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'theseus-rev-')));
   git(dir, 'init', '-q');
   fs.writeFileSync(path.join(dir, 'check.js'), "process.exit(require('fs').existsSync('impl.txt') ? 0 : 1);\n");
   git(dir, 'add', '-A');
   git(dir, 'commit', '-q', '-m', 'initial');
-  ok(dir, 'init', '--key', 'R', '--reference', 'mock.html', '--test-cmd', 'node check.js', '--approvals', approvals, ...extra);
+  ok(dir, 'init', '--key', 'R', '--reference', 'mock.html', '--test-cmd', 'node check.js', ...extra);
   const plan = path.join(path.dirname(dir), `plan-${path.basename(dir)}.json`);
   fs.writeFileSync(plan, JSON.stringify([{ title: 'Form', done: 'matches the mock', ui: true, tests: ['error state'] }]));
   confirmBrief(dir);
@@ -76,6 +77,11 @@ function started(extra = [], { approvals = 'any' } = {}) {
 }
 
 const gates = dir => JSON.parse(ok(dir, 'status', '--json').out).checkpoints[0].gates;
+
+/** The human clicks Approve in the viewer; the agent never approves. */
+function advanceInViewer(dir) {
+  return core.doneMessage(core.advance(core.resolvePaths(dir), 'CP1', { by: 'human (viewer)', source: 'viewer' }));
+}
 
 function passVisual(dir) {
   ok(dir, 'record', 'CP1', 'visual', '--reviewer', 'look', '--findings', '0');
@@ -102,16 +108,16 @@ test('one code reviewer: one clean verdict passes, and a second reviewer is refu
   passVisual(dir);
   assert.match(ok(dir, 'record', 'CP1', 'review', '--reviewer', 'a', '--findings', '0').out, /gate 3 \(review\) passed — 1 distinct reviewer clean/);
   refused(dir, /this run uses 1 code reviewer: a — re-review with the same id/, 'record', 'CP1', 'review', '--reviewer', 'b', '--findings', '0');
-  assert.match(ok(dir, 'advance', 'CP1', '--approved-by', 'h').out, /CP1 done/);
+  assert.match(advanceInViewer(dir), /CP1 done/);
 });
 
 test('one code reviewer with findings blocks, and a clean re-review with the same id passes', () => {
   const dir = started(['--reviewers', '1']);
   passVisual(dir);
   ok(dir, 'record', 'CP1', 'review', '--reviewer', 'a', '--findings', '2');
-  refused(dir, /gate 3 \(review\) for CP1 has open findings/, 'advance', 'CP1', '--approved-by', 'h');
+  refused(dir, /gate 3 \(review\) for CP1 has open findings/, 'advance', 'CP1');
   ok(dir, 'record', 'CP1', 'review', '--reviewer', 'a', '--findings', '0');
-  assert.match(ok(dir, 'advance', 'CP1', '--approved-by', 'h').out, /CP1 done/);
+  assert.match(advanceInViewer(dir), /CP1 done/);
 });
 
 test('two code reviewers stay capped at two distinct ids', () => {
@@ -127,7 +133,7 @@ test('no code reviewers: gate 3 is off, recording is refused, and advance comple
   passVisual(dir);
   assert.strictEqual(gates(dir).review, 'off');
   refused(dir, /this run has no code reviewers \(reviewers: 0\)/, 'record', 'CP1', 'review', '--reviewer', 'a', '--findings', '0');
-  assert.match(ok(dir, 'advance', 'CP1', '--approved-by', 'h').out, /CP1 done/);
+  assert.match(advanceInViewer(dir), /CP1 done/);
 });
 
 // ── visual on/off ────────────────────────────────────────────────────────────
@@ -138,7 +144,7 @@ test('visual off: a UI checkpoint advances without visual verdicts, and recordin
   refused(dir, /visual review is off for this run/, 'record', 'CP1', 'visual', '--reviewer', 'look', '--findings', '0');
   ok(dir, 'record', 'CP1', 'review', '--reviewer', 'a', '--findings', '0');
   ok(dir, 'record', 'CP1', 'review', '--reviewer', 'b', '--findings', '0');
-  assert.match(ok(dir, 'advance', 'CP1', '--approved-by', 'h').out, /CP1 done/);
+  assert.match(advanceInViewer(dir), /CP1 done/);
 });
 
 test('with every review off, gates 1 and the human are all that remain', () => {
@@ -146,7 +152,7 @@ test('with every review off, gates 1 and the human are all that remain', () => {
   assert.match(ok(dir, 'status').out, /reviews: visual off, code reviewers 0/);
   assert.match(ok(dir, 'status').out, /next: gates passed: theseus\.js advance CP1/);
   assert.strictEqual(theseus(dir, 'check').code, 0, 'the Stop hook lets the session stop');
-  assert.match(ok(dir, 'advance', 'CP1', '--approved-by', 'h').out, /CP1 done/);
+  assert.match(advanceInViewer(dir), /CP1 done/);
 });
 
 // ── changing mid-run ─────────────────────────────────────────────────────────
@@ -164,8 +170,8 @@ test('the human lowering 2 → 1 lets one clean reviewer pass; raising it back n
   assert.match(ok(dir, 'status').out, /next: gate 3 for CP1: two isolated reviewers/);
 });
 
-test('under approvals viewer the CLI may raise reviews but not lower them', () => {
-  const dir = started(['--reviewers', '1', '--visual', 'off'], { approvals: 'viewer' });
+test('the CLI may raise reviews but not lower them', () => {
+  const dir = started(['--reviewers', '1', '--visual', 'off']);
   refused(dir, /loosen settings in the viewer/, 'config', '--reviewers', '0');
   assert.match(ok(dir, 'config', '--reviewers', '2').out, /settings changed — reviewers 1 → 2/);
   assert.match(ok(dir, 'config', '--visual', 'on').out, /settings changed — visual off → on/);
@@ -181,7 +187,7 @@ test('a run made before these settings still needs two code reviewers', () => {
   fs.writeFileSync(runFile, JSON.stringify(run));
   passVisual(dir);
   ok(dir, 'record', 'CP1', 'review', '--reviewer', 'a', '--findings', '0');
-  refused(dir, /gate 3 \(review\) for CP1 has fewer than 2 distinct clean reviewers/, 'advance', 'CP1', '--approved-by', 'h');
+  refused(dir, /gate 3 \(review\) for CP1 has fewer than 2 distinct clean reviewers/, 'advance', 'CP1');
 });
 
 // ── viewer ───────────────────────────────────────────────────────────────────

@@ -16,6 +16,7 @@ const core = require('./theseus');
 const { startServer } = require('./server');
 
 const SCRIPT = path.join(__dirname, 'theseus.js');
+const { requirementsBrief } = require('./brief-fixture');
 const CHECKPOINTS = [
   { title: 'Balance rule', done: 'balance never negative', ui: false, tests: ['rejects overdraw'] },
   { title: 'Request form', done: 'matches the mock', ui: true, tests: ['error state'] },
@@ -42,7 +43,7 @@ function ok(dir, ...args) {
 /** Every run started by this version needs a confirmed brief before it can plan. */
 function confirmBrief(dir) {
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'theseus-brief-')), 'brief.json');
-  fs.writeFileSync(file, JSON.stringify({ goal: 'g', understanding: 'u', areas: ['a'] }));
+  fs.writeFileSync(file, JSON.stringify(requirementsBrief()));
   ok(dir, 'brief', '--file', file);
   const core = require('./theseus');
   core.approveBrief(core.resolvePaths(dir), { by: 'human (viewer)', source: 'viewer' });
@@ -113,7 +114,7 @@ test('state carries the run, every checkpoint and the next action', () =>
   withServer(async ({ api }) => {
     const state = await (await api('/api/state')).json();
     assert.strictEqual(state.run.key, 'HR-7');
-    assert.strictEqual(state.run.approvals, 'viewer');
+    assert.strictEqual(state.run.approvals, undefined, 'the approvals setting is gone');
     assert.deepStrictEqual(state.checkpoints.map(c => [c.id, c.status, c.approved]), [['CP1', 'pending', false], ['CP2', 'pending', false]]);
     assert.match(state.next, /human approves the plan \(CP1, CP2\) in the viewer/);
   }));
@@ -228,7 +229,7 @@ test('serve starts a background viewer, reuses it, and stop ends it', async () =
 
 test('the viewer can change any setting, and bad values are refused', () =>
   withServer(async ({ dir, server, api }) => {
-    const res = await api('/api/settings', { method: 'POST', body: JSON.stringify({ autonomy: 'unattended', approvals: 'viewer', granularity: 'xs-s' }) });
+    const res = await api('/api/settings', { method: 'POST', body: JSON.stringify({ autonomy: 'unattended', granularity: 'xs-s' }) });
     assert.strictEqual(res.status, 200);
     assert.match((await res.json()).message, /Settings saved: autonomy step → unattended, granularity s-m → xs-s\. The agent picks them up on its next step\./);
     assert.match(ok(dir, 'status').out, /settings changed by human \(viewer\): autonomy step → unattended, granularity s-m → xs-s/);

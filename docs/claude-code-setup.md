@@ -63,9 +63,9 @@ a missing `node`.
 
 - **Viewer:** `theseus.js serve` starts a local viewer on `127.0.0.1` and prints its
   link. In Claude Code on your own machine, open it in a browser to follow the run and
-  approve checkpoints. In Claude Code on the web, the link points inside the cloud
-  container and is not reachable. Start those runs with `--approvals any` or
-  `--autonomy unattended`.
+  approve checkpoints. Theseus requires a human who can open that viewer; it does
+  not offer chat or CLI approval as a fallback. If the chosen environment cannot
+  expose the local viewer, use a viewer-accessible environment for the run.
 - **Several repos:** start the session in the folder that holds them and run
   `theseus.js init --repos api,web …` there. The Stop hook finds that run from inside
   any of the listed repos. Run `theseus.js agents` in that same folder, since Claude
@@ -90,7 +90,8 @@ a missing `node`.
   - **`omitClaudeMd`** needs Claude Code v2.1.271 or later, per that page. On older
     versions, expect the field to be ignored and the agent to load CLAUDE.md as
     before.
-- **Settings mid-run:** autonomy, approvals, visual review (on/off) and the number of
-  code reviewers (0–2) can be changed at any time by clicking their chip in the
-  viewer's header. The agent sees a `settings changed` line on
+- **Settings mid-run:** autonomy, visual review (on/off) and the number of code
+  reviewers (0–2) can be changed by clicking their chip in the viewer's header.
+  Unattended autonomy is available only after the requirements brief is approved.
+  The agent sees a `settings changed` line on
   its next command.

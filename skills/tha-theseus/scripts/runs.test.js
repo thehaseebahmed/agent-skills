@@ -14,6 +14,7 @@ const { spawnSync, spawn } = require('node:child_process');
 
 const SCRIPT = path.join(__dirname, 'theseus.js');
 const core = require('./theseus');
+const { requirementsBrief } = require('./brief-fixture');
 const { startServer } = require('./server');
 
 function env() {
@@ -58,10 +59,10 @@ function repo() {
 }
 
 /** Start run `key`, confirm its brief and a one-checkpoint plan. */
-function startRun(dir, key, extra = ['--approvals', 'any']) {
+function startRun(dir, key, extra = []) {
   ok(dir, 'init', '--key', key, '--reference', 'r', '--test-cmd', `node check.js ${key}.done`, ...extra);
   const brief = path.join(path.dirname(dir), `brief-${key}-${path.basename(dir)}.json`);
-  fs.writeFileSync(brief, JSON.stringify({ goal: `goal ${key}`, understanding: 'u', areas: ['a'] }));
+  fs.writeFileSync(brief, JSON.stringify(requirementsBrief({ goal: `goal ${key}` })));
   ok(dir, 'brief', '--file', brief);
   core.approveBrief(viewer(dir), { by: 'human (viewer)', source: 'viewer' });
   const plan = path.join(path.dirname(dir), `plan-${key}-${path.basename(dir)}.json`);
@@ -148,12 +149,12 @@ test('complete waits for the human; confirming saves a summary and moves the run
   finishCp1(dir, 'ONE');
   assert.match(ok(dir, 'complete').out, /run ONE is waiting for the human to confirm it complete in the viewer/);
   refused(dir, /run ONE is waiting for the human to confirm it complete/, 'add', '--file', 'x.json');
-  refused(dir, /approve in the viewer/, 'complete', '--approved-by', 'me');
+  refused(dir, /--approved-by has been removed — approvals are made in the viewer/, 'complete', '--approved-by', 'me');
   const result = core.closeRun(viewer(dir), 'confirm', { source: 'viewer', by: 'human (viewer)' });
   assert.strictEqual(result.final, 'completed');
   const summary = JSON.parse(fs.readFileSync(path.join(dir, '.theseus', 'archive', 'ONE', 'summary.json'), 'utf8'));
   assert.deepStrictEqual(summary.checkpoints, { done: 1, total: 1 });
-  assert.deepStrictEqual(summary.approvals, { viewer: 1, agent: 0, deferred: 0 });
+  assert.deepStrictEqual(summary.approvals, { viewer: 1, deferred: 0 });
   assert.deepStrictEqual(summary.reviews.code, { verdicts: 2, findings: 0 });
   assert.strictEqual(summary.status, 'completed');
   refused(dir, /no active theseus run/, 'status');
@@ -174,7 +175,9 @@ test('abandon needs a reason, and once confirmed the run is closed with it', () 
   const dir = repo();
   startRun(dir, 'ONE');
   refused(dir, /--reason is required/, 'abandon');
-  assert.match(ok(dir, 'abandon', '--reason', 'scope changed', '--approved-by', 'h').out, /run ONE abandoned/);
+  assert.match(ok(dir, 'abandon', '--reason', 'scope changed').out, /run ONE is waiting for the human to confirm it abandoned in the viewer/);
+  refused(dir, /--approved-by has been removed — approvals are made in the viewer/, 'abandon', '--reason', 'scope changed', '--approved-by', 'me');
+  core.closeRun(viewer(dir), 'confirm', { source: 'viewer', by: 'human (viewer)' });
   const summary = JSON.parse(fs.readFileSync(path.join(dir, '.theseus', 'archive', 'ONE', 'summary.json'), 'utf8'));
   assert.deepStrictEqual([summary.status, summary.reason], ['abandoned', 'scope changed']);
   refused(dir, /no active theseus run/, 'begin', 'CP1');
@@ -185,7 +188,8 @@ test('after closing, the hint names the paused runs to resume', () => {
   const dir = repo();
   startRun(dir, 'ONE');
   startRun(dir, 'TWO');
-  ok(dir, 'abandon', '--reason', 'x', '--approved-by', 'h');
+  ok(dir, 'abandon', '--reason', 'x');
+  core.closeRun(viewer(dir), 'confirm', { source: 'viewer', by: 'human (viewer)' });
   refused(dir, /no active theseus run — open runs: ONE — resume one with theseus\.js switch KEY/, 'status');
   ok(dir, 'switch', 'ONE');
   assert.match(ok(dir, 'status').out, /theseus: ONE/);
@@ -195,7 +199,8 @@ test('archive is now an alias for complete', () => {
   const dir = repo();
   startRun(dir, 'ONE');
   finishCp1(dir, 'ONE');
-  assert.match(ok(dir, 'archive').out, /run ONE completed/);
+  assert.match(ok(dir, 'archive').out, /run ONE is waiting for the human to confirm it complete in the viewer/);
+  core.closeRun(viewer(dir), 'confirm', { source: 'viewer', by: 'human (viewer)' });
   assert.ok(fs.existsSync(path.join(dir, '.theseus', 'archive', 'ONE', 'summary.json')));
 });
 
