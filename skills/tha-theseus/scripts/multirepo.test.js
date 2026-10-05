@@ -124,11 +124,12 @@ test('init --repos works from a folder that is not a repo and stores per-repo te
   makeRepo(path.join(dir, 'api'), 'a');
   makeRepo(path.join(dir, 'libs', 'shared'), 'b');
   const out = ok(dir, 'init', '--key', 'K', '--reference', 'r', '--repos', 'api,shared=libs/shared', '--test-cmd', 'npm test', '--test-cmd-shared', 'pnpm test').out;
-  assert.match(out, /repos in this run: api \(api\), shared \(libs\/shared\) — every gate covers all of them/);
+  // theseus prints repo paths with the OS separator; match either form.
+  assert.match(out, /repos in this run: api \(api\), shared \(libs[\\\/]shared\) — every gate covers all of them/);
   const run = JSON.parse(fs.readFileSync(path.join(dir, '.theseus', 'current', 'run.json'), 'utf8'));
   assert.deepStrictEqual(run.repos, [
     { name: 'api', path: 'api', testCmd: null },
-    { name: 'shared', path: 'libs/shared', testCmd: 'pnpm test' },
+    { name: 'shared', path: path.join('libs', 'shared'), testCmd: 'pnpm test' },
   ]);
 });
 

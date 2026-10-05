@@ -77,7 +77,7 @@ costs tokens too, so keep both down:
 
 - **Use the generated agents** (`theseus agents`, Step 1). They carry their brief,
   narrow tools, an effort level and a turn cap. In Claude Code the planner and
-  reviewer also skip CLAUDE.md.
+  reviewer also skip CLAUDE.md; in opencode they are permission-locked read-only.
 - **Hand each subagent only its inputs:** the checkpoint, the learnings, and for
   reviewers `theseus diff CP`. Never the plan, a transcript, or your own reasoning.
 - **Keep only their short reply.** The briefs cap it at about 10 lines.
@@ -90,9 +90,11 @@ How to get a fresh context:
 
 | Harness | Mechanism |
 |---|---|
-| Claude Code or Copilot, after `theseus agents` | dispatch to `theseus-planner` / `-builder` / `-reviewer` by name |
+| Claude Code or Copilot, after `theseus agents --target claude,copilot` | dispatch to `theseus-planner` / `-builder` / `-reviewer` by name |
+| OpenCode, after `theseus agents --target opencode` | the task tool, with `subagent_type` `theseus-planner` / `-builder` / `-reviewer` |
 | Claude Code, without them | the Agent tool, with the brief file as the prompt |
 | Copilot (VS Code, CLI), without them | its subagent mechanism, likewise |
+| OpenCode, without them | the task tool's built-in subagents, with the brief file as the prompt |
 | Neither available | a fresh headless session: `claude -p "<brief>"` or `copilot -p "<brief>"` |
 | None of the above | do the work inline. For reviewers, record `--isolation none` |
 
@@ -182,19 +184,33 @@ Settle these with the human before anything else:
    | `--reviewers` | `2` (default) / `1` / `0` | Exactly how many code reviewers gate 3 deploys; every one must be clean. `0` skips gate 3 |
 
 7. **Agents:** run `theseus agents` once per repo, unless the files exist already. It
-   writes lean `theseus-planner`, `theseus-builder` and `theseus-reviewer` agents for
-   Claude Code and/or Copilot. Ask whether the human wants specific models:
+   writes lean `theseus-planner`, `theseus-builder` and `theseus-reviewer` agents.
+   With no `--target` it writes only the generic portable files under
+   `.agents/agents/`; name a target for each harness you actually use:
+
+   | `--target` | Writes | Where |
+   |---|---|---|
+   | `generic` | portable frontmatter only (`name`, `description`, `model`) | `.agents/agents/` |
+   | `claude` | Claude Code agents | `.claude/agents/` |
+   | `opencode` | opencode subagents, read-only roles permission-locked | `.opencode/agents/` |
+   | `copilot` | Copilot agents | `.github/agents/` |
 
    ```bash
-   theseus agents --target claude,copilot \
+   theseus agents --target claude,opencode,copilot \
      --planner-model opus --planner-model-copilot "<Copilot model name>" \
+     --planner-model-opencode "anthropic/claude-sonnet-4-5" \
      --reviewer-model sonnet --reviewer-model-copilot "<Copilot model name>"
    ```
 
-   - Model names differ between the two tools, which is why there are two flags.
-     Leave one out and that agent inherits the session's model.
+   - Model names differ between tools, which is why there is a flag per target
+     (Claude keeps the bare `--<role>-model`). Leave one out and that agent
+     inherits the session's model. opencode models are `provider/model-id`.
    - `--<role>-effort` and `--<role>-max-turns` override the lean defaults. Those
      apply to Claude Code only.
+   - **opencode caveat:** it has no `omitClaudeMd` equivalent, so the planner and
+     reviewer still see the project's AGENTS.md; their isolation is the fresh
+     context alone. The read-only roles are locked with `permission: deny` rules
+     instead of a tool list.
    - **Copilot CLI caveat:** it has been reported to silently downgrade a subagent to
      the session's model when the subagent's model costs more (github/copilot-cli#2758).
      Start the session on at least the planner's model.

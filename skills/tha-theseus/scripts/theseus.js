@@ -71,9 +71,11 @@ const USAGE = `usage: theseus.js <command> [args]
   learn --cp CP --source reviewer|human|other "one-line rule"
   learn --replace merged.json         replace all learnings with a compacted list
   learnings                           print the learnings, one per line, for subagent briefs
-  agents [--target claude,copilot] [--<role>-model M] [--<role>-model-copilot M]
+  agents [--target generic,claude,opencode,copilot] [--<role>-model M] [--<role>-model-copilot M]
+         [--<role>-model-opencode M] [--<role>-model-generic M]
          [--<role>-effort low|medium|high|xhigh|max|inherit] [--<role>-max-turns N]
-                                      write lean planner/builder/reviewer agents (role: planner, builder, reviewer)
+                                       write lean planner/builder/reviewer agents (role: planner, builder, reviewer)
+                                       with no --target, only the generic .agents/agents files are written
   status [--json [--full]]
   check                               for a Stop hook: exit 2 while gates are open
   runs [--json]                       every run: active, paused and closed
@@ -1761,6 +1763,19 @@ const AGENTS = {
   },
 };
 
+// Where each target's files land, and how its frontmatter looks. `generic` is the
+// portable copy: name/description/model only, the least every harness accepts.
+const TARGETS = {
+  generic: { file: (name) => path.join('.agents', 'agents', `${name}.md`) },
+  claude: { file: (name) => path.join('.claude', 'agents', `${name}.md`) },
+  opencode: { file: (name) => path.join('.opencode', 'agents', `${name}.md`) },
+  copilot: { file: (name) => path.join('.github', 'agents', `${name}.agent.md`) },
+};
+
+// The planner and reviewer read but never change anything; opencode enforces that
+// with permission rules rather than a tool list. The builder keeps the defaults.
+const OPENCODE_READ_ONLY = { edit: 'deny', bash: 'deny', task: 'deny', todowrite: 'deny' };
+
 function agentBody(role) {
   const text = fs.readFileSync(path.join(__dirname, '..', AGENTS[role].source), 'utf8');
   // reviewer.md opens with a note for the orchestrator, above a `---` rule; the agent gets only the brief below it.
@@ -1780,10 +1795,18 @@ function agentFile(target, role, { model, effort, maxTurns }) {
   const spec = AGENTS[role];
   const name = `theseus-${role}`;
   const lines = ['---', `name: ${name}`, `description: ${JSON.stringify(spec.description)}`];
-  lines.push(`tools: ${target === 'claude' ? spec.claudeTools : spec.copilotTools}`);
+  if (target === 'claude' || target === 'copilot') lines.push(`tools: ${target === 'claude' ? spec.claudeTools : spec.copilotTools}`);
+  if (target === 'opencode') {
+    lines.push('mode: subagent');
+    // The read-only roles get their narrow Claude tool set as permission denials
+    // instead; opencode has no field that filters tools to a list.
+    if (role !== 'builder') {
+      lines.push('permission:', ...Object.entries(OPENCODE_READ_ONLY).map(([k, v]) => `  ${k}: ${v}`));
+    }
+  }
   // Copilot CLI rejects an array here (github/copilot-cli#2133), so always one string.
   if (model) lines.push(`model: ${JSON.stringify(model)}`);
-  // Claude Code only (code.claude.com/docs/en/sub-agents); Copilot files get no unverified fields.
+  // Claude Code only (code.claude.com/docs/en/sub-agents); other targets get no unverified fields.
   if (target === 'claude') {
     if (effort) lines.push(`effort: ${effort}`);
     if (maxTurns) lines.push(`maxTurns: ${maxTurns}`);
@@ -1791,20 +1814,32 @@ function agentFile(target, role, { model, effort, maxTurns }) {
   }
   lines.push('---', '', AGENT_MARKER, '', agentBody(role), '');
   return {
-    file: target === 'claude' ? path.join('.claude', 'agents', `${name}.md`) : path.join('.github', 'agents', `${name}.agent.md`),
+    file: TARGETS[target].file(name),
     content: lines.join('\n'),
   };
 }
 
 function cmdAgents(cwd, { flags }) {
+  // `agents --help` printed nothing and wrote files, because parseArgs swallowed
+  // the flag; agents is the only command with flags that write, so check first.
+  if (flags.help) {
+    console.log(USAGE);
+    return;
+  }
   // The repo it's run in, or — for a multi-repo session — the folder holding them.
   const root = gitTop(cwd) || fs.realpathSync(cwd);
-  const targets = (stringFlag(flags, 'target') || 'claude,copilot').split(',').map(s => s.trim()).filter(Boolean);
-  for (const t of targets) if (!['claude', 'copilot'].includes(t)) fail(`--target must be claude, copilot or both, not '${t}'`);
+  // With no --target, only the portable .agents/agents files are written; every
+  // harness-specific location must be asked for by name.
+  const raw = stringFlag(flags, 'target');
+  const targets = raw ? raw.split(',').map(s => s.trim()).filter(Boolean) : ['generic'];
+  if (!targets.length) fail(`--target must name at least one of ${Object.keys(TARGETS).join(', ')}`);
+  for (const t of targets) if (!Object.hasOwn(TARGETS, t)) fail(`--target must be a comma-separated list of ${Object.keys(TARGETS).join(', ')}, not '${t}'`);
+  // Claude keeps the historical bare --<role>-model; every other target names it.
+  const MODEL_FLAG = { generic: 'model-generic', claude: 'model', copilot: 'model-copilot', opencode: 'model-opencode' };
   const files = [];
   for (const target of targets) {
     for (const role of Object.keys(AGENTS)) {
-      const model = stringFlag(flags, target === 'claude' ? `${role}-model` : `${role}-model-copilot`);
+      const model = stringFlag(flags, `${role}-${MODEL_FLAG[target]}`);
       let effort = stringFlag(flags, `${role}-effort`) || AGENTS[role].effort;
       if (effort === 'inherit') effort = null;
       if (effort && !EFFORTS.includes(effort)) fail(`--${role}-effort must be one of ${EFFORTS.join(', ')} or inherit, not '${effort}'`);
