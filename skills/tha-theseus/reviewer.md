@@ -63,5 +63,6 @@ FINDINGS: <count>
 SUMMARY: <one sentence>
 ```
 
-The orchestrator records `FINDINGS` as the count. `PASS` with a non-zero count is
-invalid.
+The orchestrator saves this block verbatim and records it with `--verdict`; the
+human reads every finding in the viewer. `FINDINGS` must equal the number of
+numbered findings, and `PASS` with a non-zero count is invalid.

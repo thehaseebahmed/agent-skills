@@ -44,6 +44,14 @@ function confirmBrief(dir) {
   core.approveBrief(core.resolvePaths(dir), { by: 'human (viewer)', source: 'viewer' });
 }
 
+
+/** A reviewer's reply with `n` findings, saved to a file for `record … --verdict`. */
+function verdict(n) {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'theseus-verdict-')), 'verdict.txt');
+  const items = Array.from({ length: n }, (_, i) => `${i + 1}. src/x.js:${i + 1} — wrong ${i + 1} — rule ${i + 1} — fix ${i + 1}`);
+  fs.writeFileSync(file, [`VERDICT: ${n ? 'FINDINGS' : 'PASS'}`, `FINDINGS: ${n}`, ...items, `SUMMARY: ${n} problem(s).`].join('\n'));
+  return file;
+}
 function refused(dir, pattern, ...args) {
   const r = theseus(dir, ...args);
   assert.strictEqual(r.code, 1, `expected theseus ${args.join(' ')} to fail, got ${r.code}: ${r.out}`);
@@ -114,7 +122,7 @@ test('one code reviewer: one clean verdict passes, and a second reviewer is refu
 test('one code reviewer with findings blocks, and a clean re-review with the same id passes', () => {
   const dir = started(['--reviewers', '1']);
   passVisual(dir);
-  ok(dir, 'record', 'CP1', 'review', '--reviewer', 'a', '--findings', '2');
+  ok(dir, 'record', 'CP1', 'review', '--reviewer', 'a', '--verdict', verdict(2));
   refused(dir, /gate 3 \(review\) for CP1 has open findings/, 'advance', 'CP1');
   ok(dir, 'record', 'CP1', 'review', '--reviewer', 'a', '--findings', '0');
   assert.match(advanceInViewer(dir), /CP1 done/);
@@ -124,7 +132,7 @@ test('two code reviewers stay capped at two distinct ids', () => {
   const dir = started();
   passVisual(dir);
   ok(dir, 'record', 'CP1', 'review', '--reviewer', 'a', '--findings', '0');
-  ok(dir, 'record', 'CP1', 'review', '--reviewer', 'b', '--findings', '1');
+  ok(dir, 'record', 'CP1', 'review', '--reviewer', 'b', '--verdict', verdict(1));
   refused(dir, /this run uses 2 code reviewers: a, b — re-review with the same ids/, 'record', 'CP1', 'review', '--reviewer', 'c', '--findings', '0');
 });
 
@@ -208,6 +216,89 @@ test('the viewer can set visual and reviewers, and refuses bad values', async ()
     const bad = await post({ reviewers: '3' });
     assert.strictEqual(bad.status, 409);
     assert.match((await bad.json()).error, /reviewers must be 0, 1 or 2, not '3'/);
+  } finally {
+    await server.close();
+  }
+});
+
+// ── finding details ──────────────────────────────────────────────────────────
+
+const evidenceOf = (dir, gate) => core.snapshot(core.resolvePaths(dir)).checkpoints[0].evidence[gate];
+
+function reply(text) {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'theseus-verdict-')), 'reply.txt');
+  fs.writeFileSync(file, text);
+  return file;
+}
+
+test('a verdict file is parsed into findings, and --findings defaults to its count', () => {
+  const dir = started(['--reviewers', '1']);
+  passVisual(dir);
+  const file = reply([
+    '```',
+    'VERDICT: FINDINGS',
+    'FINDINGS: 2',
+    '1. src/form.js:12 — submits twice on Enter — learnings: one submit per action — disable the button while pending',
+    '2. tests/form.test.js — the error test never asserts the message',
+    '   it only checks that something rendered',
+    'SUMMARY: double submit and a weak test.',
+    '```',
+  ].join('\n'));
+  assert.match(ok(dir, 'record', 'CP1', 'review', '--reviewer', 'a', '--verdict', file).out, /a reported 2 finding\(s\)/);
+  const [round] = evidenceOf(dir, 'review').history;
+  assert.deepStrictEqual(
+    { reviewer: round.reviewer, round: round.round, findings: round.findings, verdict: round.verdict, summary: round.summary },
+    { reviewer: 'a', round: 1, findings: 2, verdict: 'FINDINGS', summary: 'double submit and a weak test.' },
+  );
+  assert.deepStrictEqual(round.items[0], {
+    text: 'src/form.js:12 — submits twice on Enter — learnings: one submit per action — disable the button while pending',
+    where: 'src/form.js:12', what: 'submits twice on Enter', rule: 'learnings: one submit per action', fix: 'disable the button while pending',
+  });
+  assert.deepStrictEqual(round.items[1], { text: 'tests/form.test.js — the error test never asserts the message\nit only checks that something rendered' });
+});
+
+test('every review round is kept: a clean re-review does not erase the earlier findings', () => {
+  const dir = started(['--reviewers', '1']);
+  passVisual(dir);
+  ok(dir, 'record', 'CP1', 'review', '--reviewer', 'a', '--verdict', verdict(2));
+  ok(dir, 'record', 'CP1', 'review', '--reviewer', 'a', '--verdict', verdict(0), '--note', 'fixed both');
+  const ev = evidenceOf(dir, 'review');
+  assert.deepStrictEqual(ev.history.map(h => [h.reviewer, h.round, h.findings, h.items.length]), [['a', 1, 2, 2], ['a', 2, 0, 0]]);
+  assert.strictEqual(ev.history[1].note, 'fixed both');
+  assert.strictEqual(ev.reviewers.a.findings, 0, 'the gate still judges the latest verdict');
+  assert.strictEqual(gates(dir).review, 'pass');
+  const cp = core.snapshot(core.resolvePaths(dir)).checkpoints[0];
+  assert.strictEqual(cp.fp, ev.history[1].fp, 'the viewer can tell which rounds saw the current code');
+  assert.notStrictEqual(cp.fp, undefined);
+});
+
+test('findings without details are refused', () => {
+  const dir = started(['--reviewers', '1']);
+  passVisual(dir);
+  refused(dir, /findings need their details: .*--verdict FILE/, 'record', 'CP1', 'review', '--reviewer', 'a', '--findings', '1');
+  refused(dir, /findings need their details/, 'record', 'CP1', 'visual', '--reviewer', 'look', '--findings', '1');
+});
+
+test('a verdict that contradicts itself or --findings is refused', () => {
+  const dir = started(['--reviewers', '1']);
+  passVisual(dir);
+  const rec = file => ['record', 'CP1', 'review', '--reviewer', 'a', '--verdict', file];
+  refused(dir, /does not match the verdict's FINDINGS: 2/, ...rec(verdict(2)), '--findings', '1');
+  refused(dir, /says FINDINGS: 2 but lists 1 numbered finding$/m, ...rec(reply('VERDICT: FINDINGS\nFINDINGS: 2\n1. a — b — c — d\nSUMMARY: s')));
+  refused(dir, /says PASS with FINDINGS: 1 — that is invalid/, ...rec(reply('VERDICT: PASS\nFINDINGS: 1\n1. x\nSUMMARY: s')));
+  refused(dir, /has no VERDICT: PASS or VERDICT: FINDINGS line/, ...rec(reply('looks fine to me')));
+  refused(dir, /--verdict: '.*nope\.txt' is not a file/, ...rec(path.join(dir, 'nope.txt')));
+  assert.strictEqual(evidenceOf(dir, 'review'), null, 'nothing was recorded');
+});
+
+test('the viewer state carries each round with its findings', async () => {
+  const dir = started();
+  ok(dir, 'record', 'CP1', 'visual', '--reviewer', 'look', '--verdict', verdict(1));
+  const server = await startServer(core.resolvePaths(dir), { port: 0 });
+  try {
+    const res = await fetch(`http://127.0.0.1:${server.port}/api/state`, { headers: { 'x-theseus-token': server.token } });
+    const [round] = (await res.json()).checkpoints[0].evidence.visual.history;
+    assert.deepStrictEqual([round.reviewer, round.findings, round.items[0].where, round.items[0].fix], ['look', 1, 'src/x.js:1', 'fix 1']);
   } finally {
     await server.close();
   }

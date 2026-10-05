@@ -336,8 +336,8 @@ For each checkpoint, in order:
       2. Screenshot both into `.theseus/current/evidence/<CP>/`. The viewer shows
          them side by side.
       3. Dispatch two blind reviewers, one for appearance and one for interaction.
-      4. Record each:
-         `theseus record CP1 visual --reviewer look --findings N`.
+      4. Save each reply verbatim to a file and record it:
+         `theseus record CP1 visual --reviewer look --verdict look.txt`.
 4. **Gate 3, adversarial review.**
     - If the run has `reviewers: 0`, skip this step: the gate counts as passed.
     - Otherwise dispatch **exactly as many separate `theseus-reviewer` subagents as
@@ -348,8 +348,11 @@ For each checkpoint, in order:
       - the learnings
 
       Never give them your reasoning, or the builder's.
-    - Record each verdict:
-      `theseus record CP1 review --reviewer a --findings N`.
+    - Save each reviewer's reply verbatim to a file and record it:
+      `theseus record CP1 review --reviewer a --verdict a.txt`. The script reads the
+      count from it, refuses a reply whose count and numbered findings disagree, and
+      keeps every round so the viewer shows each finding in full. Findings without
+      `--verdict` are refused.
 5. **Any findings.**
     - Dispatch a **fresh** `theseus-builder` in fix mode, with all the findings. It
       fixes every one and re-records `tests`. Not the original builder, and not you.
