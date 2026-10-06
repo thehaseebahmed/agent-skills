@@ -860,6 +860,83 @@ function validateSettings(changes) {
 }
 
 /**
+ * The one spec of what the four settings are and what the viewer may offer for
+ * them. The option lists are the curated choices; a value outside them (any
+ * batch:N) stays legal — settingsFor() labels whatever the run holds so the
+ * chips never show a raw value. Hints are the words the human reads.
+ */
+const SETTINGS_SPEC = {
+  autonomy: {
+    label: 'approve',
+    options: [
+      { value: 'step', short: 'every checkpoint', text: 'Every checkpoint', hint: 'You approve each one in here.' },
+      { value: 'batch:2', short: 'every 2 checkpoints', text: 'Every 2 checkpoints', hint: 'One approval covers the next two.' },
+      { value: 'batch:3', short: 'every 3 checkpoints', text: 'Every 3 checkpoints', hint: 'One approval covers the next three.' },
+      { value: 'batch:5', short: 'every 5 checkpoints', text: 'Every 5 checkpoints', hint: 'One approval covers the next five.' },
+      { value: 'unattended', short: 'in the PR', text: 'Only in the PR', hint: 'The agent stops asking; you review the pull request.' },
+    ],
+  },
+  granularity: {
+    label: 'checkpoint size',
+    options: [
+      { value: 's-m', short: 'S–M', text: 'S–M', hint: 'A small vertical slice per checkpoint, about 2–5 files.' },
+      { value: 'xs-s', short: 'XS–S', text: 'XS–S', hint: 'Tiny checkpoints; each costs a round of subagent start-ups.' },
+    ],
+  },
+  visual: {
+    label: 'visual review',
+    options: [
+      { value: 'on', short: 'on', text: 'On', hint: 'UI checkpoints are compared with the reference by two blind reviewers.' },
+      { value: 'off', short: 'off', text: 'Off', hint: 'Skip the visual comparison for every checkpoint.' },
+    ],
+  },
+  reviewers: {
+    label: 'code reviewers',
+    options: [
+      { value: '2', short: '2', text: 'Two reviewers', hint: 'Two independent reviewers; both must be clean.' },
+      { value: '1', short: '1', text: 'One reviewer', hint: 'One reviewer, who must be clean.' },
+      { value: '0', short: 'none', text: 'No code review', hint: 'Skip code review for every checkpoint.' },
+    ],
+  },
+};
+
+/**
+ * The run's settings plus the spec the viewer renders: one source for the
+ * values, the choices and whether each is available now. A current value
+ * outside the curated list is labeled rather than shown raw.
+ */
+function settingsFor(run) {
+  const values = settingsOf(run);
+  const confirmed = Boolean(run.brief && run.brief.status === 'confirmed');
+  const options = {};
+  for (const [key, def] of Object.entries(SETTINGS_SPEC)) {
+    const list = def.options.map(o => ({
+      value: o.value,
+      short: o.short,
+      text: o.text,
+      hint: o.hint,
+      current: o.value === values[key],
+      available: !(key === 'autonomy' && o.value === 'unattended' && !confirmed),
+    }));
+    if (!list.some(o => o.current)) {
+      const batch = /^batch:([1-9]\d*)$/.exec(values[key]);
+      const label = batch ? `every ${batch[1]} checkpoints` : values[key];
+      list.push({ value: values[key], short: label, text: batch ? `Every ${batch[1]} checkpoints` : values[key], hint: 'Set from the CLI; the menu offers the common choices.', current: true, available: true });
+    }
+    options[key] = { label: def.label, options: list };
+  }
+  return { ...values, options };
+}
+
+/** One line naming the settings the run proceeds with, shown at plan approval. */
+function settingsSummary(run) {
+  const s = settingsOf(run);
+  const approve = s.autonomy === 'step' ? 'every checkpoint' : s.autonomy === 'unattended' ? 'only in the PR' : `every ${s.autonomy.slice(6)} checkpoints`;
+  const reviewers = `${s.reviewers} code reviewer${s.reviewers === '1' ? '' : 's'}`;
+  return `${approve} · visual ${s.visual} · ${reviewers}`;
+}
+
+/**
  * Change settings mid-run. The viewer controls any relaxation. The agent may
  * only tighten the review cadence and may never enable unattended autonomy.
  */
@@ -1064,6 +1141,7 @@ function snapshot(p) {
   });
   return {
     run,
+    settings: settingsFor(run),
     checkpoints,
     next: nextAction(p, state, run),
     learnings: readLearnings(p),
@@ -2018,6 +2096,8 @@ module.exports = {
   GateError,
   parseVerdict,
   setSettings,
+  settingsFor,
+  settingsSummary,
   resolvePaths,
   pathsFor,
   loadRun,

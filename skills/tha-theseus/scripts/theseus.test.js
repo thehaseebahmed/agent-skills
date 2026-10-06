@@ -630,6 +630,74 @@ test('changing autonomy resets batch credit', () => {
   assert.strictEqual(JSON.parse(ok(dir, 'status', '--json').out).run.approvalCredit, 0);
 });
 
+// ── one settings spec, served to the viewer ──────────────────────────────────
+
+test('the snapshot carries the settings with the choices the viewer may offer', () => {
+  const dir = viewerRun();
+  const snap = core.snapshot(core.resolvePaths(dir));
+  assert.deepStrictEqual(
+    { autonomy: snap.settings.autonomy, granularity: snap.settings.granularity, visual: snap.settings.visual, reviewers: snap.settings.reviewers },
+    { autonomy: 'step', granularity: 's-m', visual: 'on', reviewers: '2' },
+  );
+  assert.deepStrictEqual(Object.keys(snap.settings.options), ['autonomy', 'granularity', 'visual', 'reviewers']);
+  for (const [key, group] of Object.entries(snap.settings.options)) {
+    assert.ok(group.options.length >= 2, `${key} offers its choices`);
+    assert.ok(group.options.some(o => o.current), `${key} marks the current value`);
+  }
+});
+
+test('every offered choice is a setting the run may legally hold', () => {
+  const dir = viewerRun();
+  confirmBrief(dir);
+  const spec = core.snapshot(core.resolvePaths(dir)).settings.options;
+  for (const [key, group] of Object.entries(spec)) {
+    for (const o of group.options) {
+      if (o.current) continue; // setting it again would be refused as "nothing changed"
+      assert.doesNotThrow(() => core.setSettings(core.resolvePaths(dir), { [key]: o.value }, { source: 'viewer' }), `${key}: ${o.value}`);
+    }
+  }
+  assert.deepStrictEqual(
+    { ...(() => { const s = core.snapshot(core.resolvePaths(dir)).settings; return { autonomy: s.autonomy, granularity: s.granularity, visual: s.visual, reviewers: s.reviewers }; })() },
+    { autonomy: 'unattended', granularity: 'xs-s', visual: 'off', reviewers: '0' },
+  );
+});
+
+test('settings the validators refuse never reach the offered choices, and say exactly why', () => {
+  const dir = viewerRun();
+  confirmBrief(dir);
+  const p = core.resolvePaths(dir);
+  const bad = [
+    [{ autonomy: 'sometimes' }, /autonomy must be step, batch:N or unattended, not 'sometimes'/],
+    [{ granularity: 'huge' }, /granularity must be xs-s or s-m, not 'huge'/],
+    [{ visual: 'blue' }, /visual must be on or off, not 'blue'/],
+    [{ reviewers: '3' }, /reviewers must be 0, 1 or 2, not '3'/],
+  ];
+  for (const [changes, pattern] of bad) {
+    assert.throws(() => core.setSettings(p, changes, { source: 'viewer' }), pattern);
+  }
+  for (const [key, group] of Object.entries(core.snapshot(p).settings.options)) {
+    for (const o of group.options) assert.ok(bad.every(([changes]) => changes[key] !== o.value), `${key}: ${o.value} is offered but refused`);
+  }
+});
+
+test('a batch size outside the curated menu is served with a real label', () => {
+  const dir = viewerRun(['--autonomy', 'batch:4']);
+  const group = core.snapshot(core.resolvePaths(dir)).settings.options.autonomy;
+  const synthesized = group.options.find(o => o.value === 'batch:4');
+  assert.ok(synthesized, 'batch:4 is offered');
+  assert.strictEqual(synthesized.short, 'every 4 checkpoints');
+  assert.strictEqual(synthesized.current, true);
+  assert.strictEqual(group.options.filter(o => o.current).length, 1);
+});
+
+test('unattended is offered only once the brief is confirmed', () => {
+  const dir = viewerRun();
+  const offered = () => core.snapshot(core.resolvePaths(dir)).settings.options.autonomy.options.find(o => o.value === 'unattended');
+  assert.strictEqual(offered().available, false);
+  confirmBrief(dir);
+  assert.strictEqual(offered().available, true);
+});
+
 // ── slimmer output ───────────────────────────────────────────────────────────
 
 test('every command ends with a next line', () => {
