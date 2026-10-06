@@ -117,6 +117,14 @@ test('state carries the run, every checkpoint and the next action', () =>
     assert.strictEqual(state.run.approvals, undefined, 'the approvals setting is gone');
     assert.deepStrictEqual(state.checkpoints.map(c => [c.id, c.status, c.approved]), [['CP1', 'pending', false], ['CP2', 'pending', false]]);
     assert.match(state.next, /human approves the plan \(CP1, CP2\) in the viewer/);
+    // The one settings spec, served to the page that renders the chips.
+    assert.deepStrictEqual(
+      { autonomy: state.settings.autonomy, granularity: state.settings.granularity, visual: state.settings.visual, reviewers: state.settings.reviewers },
+      { autonomy: 'step', granularity: 's-m', visual: 'on', reviewers: '2' },
+    );
+    assert.deepStrictEqual(Object.keys(state.settings.options), ['autonomy', 'granularity', 'visual', 'reviewers']);
+    assert.strictEqual(state.settings.options.granularity.options.find(o => o.value === 's-m').current, true);
+    assert.strictEqual(state.settings.options.autonomy.options.find(o => o.value === 'unattended').available, true, 'the brief is confirmed in this fixture');
   }));
 
 test('approving the plan in the viewer records it as the viewer', () =>
