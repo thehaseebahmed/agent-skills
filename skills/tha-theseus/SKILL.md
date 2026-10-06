@@ -164,26 +164,23 @@ Settle these with the human before anything else:
    - Each checkpoint names the repos it changes. A change outside them is flagged.
    - A git submodule is reviewed only as a commit line. List it in `--repos` to
      review inside it.
-4. **Autonomy:**
 
-   | Level | Human approves |
-   |---|---|
-   | `step` (default) | every checkpoint |
-   | `batch:N` | once per N checkpoints |
-| `unattended` | unavailable until the viewer approves the requirements brief; then the human may enable it in the viewer |
+**The supervision settings are not settled here.** How often the human approves,
+whether gate 2 runs, and how many reviewers gate 3 deploys never shape the plan,
+so deciding them before it exists is a guess. The human picks them in the
+viewer with the plan in front of them, and the run proceeds with whatever the
+chips say when the plan is approved. If they never touch the chips, the strict
+defaults apply: `step` (approve every checkpoint), visual `on`, `2` code
+reviewers. The init flags in the table below can pre-set them for a run whose
+shape you already know; they are optional.
 
-5. **Checkpoint size** (CLI only, rarely changed): `--granularity s-m`, the default,
-   gives fewer, larger checkpoints, each a small vertical slice. `xs-s` gives
-   Helix-sized tiny ones, which cost more subagent start-ups.
+**Checkpoint size is the one exception** — it shapes the plan the human is about
+to read. `--granularity s-m`, the default, gives fewer, larger checkpoints, each
+a small vertical slice; `xs-s` gives Helix-sized tiny ones, which cost more
+subagent start-ups. The human may also set it in the viewer when confirming the
+brief, before planning starts.
 
-6. **Reviews:** which review gates run, and how many code reviewers.
-
-   | Setting | Values | Means |
-   |---|---|---|
-   | `--visual` | `on` (default) / `off` | Whether gate 2 runs. Off skips it for every checkpoint, UI ones included |
-   | `--reviewers` | `2` (default) / `1` / `0` | Exactly how many code reviewers gate 3 deploys; every one must be clean. `0` skips gate 3 |
-
-7. **Agents:** run `theseus agents` once per repo, unless the files exist already. It
+4. **Agents:** run `theseus agents` once per repo, unless the files exist already. It
    writes lean `theseus-planner`, `theseus-builder` and `theseus-reviewer` agents.
    With no `--target` it writes only the generic portable files under
    `.agents/agents/`; name a target for each harness you actually use:
@@ -215,23 +212,29 @@ Settle these with the human before anything else:
      the session's model when the subagent's model costs more (github/copilot-cli#2758).
      Start the session on at least the planner's model.
 
-**Autonomy and reviews can change mid-run. All approvals are viewer-only.**
+**Every setting can change mid-run. All approvals are viewer-only.**
+
+| Setting | Values | Default | Viewer chip | CLI flag | Who may change it mid-run |
+|---|---|---|---|---|---|
+| approve cadence (`autonomy`) | `step`, `batch:N`, `unattended` | `step` | "approve" | `--autonomy` | viewer any direction; CLI stricter only; `unattended` viewer-only, after brief approval |
+| checkpoint size (`granularity`) | `s-m`, `xs-s` | `s-m` | "checkpoint size" | `--granularity` | viewer any direction; CLI any direction (it shapes future plans, not gates) |
+| visual review (`visual`) | `on`, `off` | `on` | "visual review" | `--visual` | viewer any direction; CLI stricter only |
+| code reviewers (`reviewers`) | `2`, `1`, `0` | `2` | "code reviewers" | `--reviewers` | viewer any direction; CLI stricter only |
 
 - In the viewer, each one is a chip in the header. Clicking it lists the choices in
   plain words ("approve every 3 checkpoints"); picking one saves it.
+- The viewer calls the approve cadence "approve", so `--autonomy step` is the chip
+  "approve: every checkpoint".
 - Or the human asks you, and you run
   `theseus config --autonomy … --visual … --reviewers …` for stricter settings.
   Checkpoint size changes only this way: `--granularity`.
-
-- The CLI may only make autonomy or review settings stricter. The viewer controls
-  any relaxation; it alone may enable `unattended`, and only after brief approval.
 - When the human changes something, your next `theseus` command starts with a
   `settings changed by …` line. Follow the new settings from that point.
 - A new checkpoint size applies to checkpoints planned from then on.
 
 ```bash
 theseus init --key HR-7 --reference "legacy/LeaveForm.tsx + docs/mock.html" \
-  --test-cmd "npm test" --arch "ARCHITECTURE.md,docs/ui.md" --autonomy step
+  --test-cmd "npm test" --arch "ARCHITECTURE.md,docs/ui.md"
 ```
 
 ### Step 1b: Submit the resolved requirements brief
@@ -294,8 +297,12 @@ theseus plan --file /tmp/checkpoints.json
 The checkpoints appear in the viewer at once, each with its done-criteria and
 planned tests.
 
-**Stop here.** Nothing is built until the human approves the list. Tell them it is
-ready, then wait:
+**Stop here.** Nothing is built until the human approves the list. This is also
+the moment they pick the run settings: with the plan in front of them — its
+checkpoint count, which are UI, how big each is — they can set the header chips
+(approve cadence, visual review, code reviewers) to fit it, and the run starts
+with exactly whatever the chips say at the click. Tell them the plan is ready
+and the chips are theirs to set, then wait:
 
 ```bash
 theseus wait     # returns when they approve or send feedback; re-run on timeout
