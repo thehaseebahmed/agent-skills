@@ -358,7 +358,7 @@
     }
     const unapproved = data.checkpoints.filter(c => !c.approved);
     if (unapproved.length) {
-      out.push(`<div class="banner"><p><b>${unapproved.length} checkpoint${unapproved.length > 1 ? 's' : ''} need your approval</b> before any code is written (${unapproved.map(c => esc(c.id)).join(', ')}). Read each one's done-criteria and tests below.</p><button class="btn primary" id="approve-plan">Approve plan</button></div>`);
+      out.push(`<div class="banner"><p><b>${unapproved.length} checkpoint${unapproved.length > 1 ? 's' : ''} need your approval</b> before any code is written (${unapproved.map(c => esc(c.id)).join(', ')}). Read each one's done-criteria and tests below. Approving starts the run with the settings in the header chips — set them now if you want different ones.</p><button class="btn primary" id="approve-plan">Approve plan</button></div>`);
     }
     const waiting = data.checkpoints.find(c => c.status === 'awaiting-approval');
     if (waiting) {

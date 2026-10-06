@@ -134,9 +134,9 @@ function startServer(p, { port = 0, token = crypto.randomBytes(16).toString('hex
       if (req.method === 'GET' && route.startsWith('/evidence/')) return serveEvidence(p, res, route.slice('/evidence/'.length));
 
       if (req.method === 'POST' && route === '/api/approve-plan') {
-        const ids = approvePlan(p, { by: 'human (viewer)', source: 'viewer' });
+        const plan = approvePlan(p, { by: 'human (viewer)', source: 'viewer' });
         broadcast(true);
-        return send(res, 200, { ok: true, message: `Approved ${ids.join(', ')}.` });
+        return send(res, 200, { ok: true, message: `Approved ${plan.cps.join(', ')} — the run proceeds with ${plan.settings}.` });
       }
       const approve = /^\/api\/approve\/(CP\d+)$/.exec(route);
       if (req.method === 'POST' && approve) {

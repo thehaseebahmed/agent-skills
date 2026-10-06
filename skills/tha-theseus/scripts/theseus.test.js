@@ -698,6 +698,19 @@ test('unattended is offered only once the brief is confirmed', () => {
   assert.strictEqual(offered().available, true);
 });
 
+test('approving the plan records the settings the run proceeds with', () => {
+  const dir = makeRepo();
+  ok(dir, 'init', '--key', 'HR-7', '--reference', 'docs/mock.html', '--test-cmd', 'node check.js', '--autonomy', 'batch:4');
+  confirmBrief(dir);
+  ok(dir, 'plan', '--file', writeJsonFile(os.tmpdir(), `cps-${process.pid}.json`, CHECKPOINTS));
+  core.setSettings(core.resolvePaths(dir), { reviewers: '1' }, { source: 'viewer' });
+  core.approvePlan(core.resolvePaths(dir), { by: 'human (viewer)', source: 'viewer' });
+  const full = JSON.parse(ok(dir, 'status', '--json', '--full').out);
+  const entry = full.log.find(e => e.event === 'plan-approved');
+  assert.deepStrictEqual(entry.settings, { autonomy: 'batch:4', granularity: 's-m', visual: 'on', reviewers: '1' });
+  assert.strictEqual(core.settingsSummary(JSON.parse(fs.readFileSync(path.join(dir, '.theseus', 'current', 'run.json'), 'utf8'))), 'every 4 checkpoints · visual on · 1 code reviewer');
+});
+
 // ── slimmer output ───────────────────────────────────────────────────────────
 
 test('every command ends with a next line', () => {

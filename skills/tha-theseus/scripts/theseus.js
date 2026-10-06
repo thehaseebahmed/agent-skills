@@ -777,8 +777,8 @@ function approvePlan(p, { by, source }) {
     cp.plannedBy = { by, source };
   }
   save(p, run, state);
-  log(p, 'plan-approved', { by, source, cps: pending.map(c => c.id) });
-  return pending.map(c => c.id);
+  log(p, 'plan-approved', { by, source, cps: pending.map(c => c.id), settings: settingsOf(run) });
+  return { cps: pending.map(c => c.id), settings: settingsSummary(run) };
 }
 
 /**
@@ -1261,6 +1261,7 @@ function cmdInit(cwd, { flags }) {
   if (repos) console.log(`theseus: repos in this run: ${repos.map(x => `${x.name} (${x.path})`).join(', ')} — every gate covers all of them`);
   if (paused) console.log(`theseus: run '${paused}' is paused; resume it later with: theseus.js switch ${paused}`);
   console.log('theseus: conduct the requirements conversation inline; inspect relevant code and standards, resolve material questions, then submit the brief: theseus.js brief --file F');
+  console.log('theseus: the human then picks the run settings in the viewer (approve cadence, visual, reviewers) when approving the plan; only the checkpoint size shapes the plan itself');
 }
 
 function cmdBrief(p, { flags }) {
