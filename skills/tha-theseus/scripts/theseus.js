@@ -11,7 +11,7 @@
  * agent's word, and it fingerprints the working tree so a fix made after a
  * review cannot ride through on the old verdict.
  *
- * State lives in `.theseus/` in the directory the agent runs in. The viewer
+ * State lives in `.theseus/` in the directory the agent runs in. The API server
  * (server.js) reads the same state through the functions exported here, so the
  * CLI and the browser can never disagree about what a gate means.
  *
@@ -33,6 +33,9 @@ const MAX_STOP_BLOCKS = 3;
 const OUTPUT_TAIL_LINES = 40;
 const LOG_LIMIT = 200;
 const DEFAULT_PORT = 4747;
+const IDLE_HOURS = 6; // fixed on purpose: not a setting
+/** The idle limit in ms. THESEUS_IDLE_MS exists for the tests alone, so they need not wait six hours. */
+const idleMs = () => Number(process.env.THESEUS_IDLE_MS) > 0 ? Number(process.env.THESEUS_IDLE_MS) : IDLE_HOURS * 3600 * 1000;
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const AUTONOMY = /^(step|unattended|batch:[1-9]\d*)$/;
 const GRANULARITY = ['xs-s', 's-m'];
@@ -52,8 +55,13 @@ const USAGE = `usage: theseus.js <command> [args]
                                       one run across several repos (from the folder holding them)
   config [--autonomy …] [--granularity …] [--visual on|off] [--reviewers 0|1|2]
                                       change agent-side settings; approvals are always made in the viewer
-  serve [--port ${DEFAULT_PORT}]            start the live viewer in the background; prints its link
-  stop                                stop the viewer
+  serve [--port ${DEFAULT_PORT}] [--headless] [--allow-origin URL[,URL]]
+                                      start the API server and its viewer in the background; prints the link.
+                                      --headless serves the API alone, for another product's UI (see api.md);
+                                      --allow-origin lets a page on that origin call it (it still needs the token)
+                                      the server stops itself after 6 hours idle; nothing is deleted,
+                                      and serve brings it back
+  stop                                stop the server
   plan --file checkpoints.json        load the checkpoint list (replaces an unstarted plan)
   add --file checkpoints.json         append checkpoints, e.g. from human feedback
   brief --file brief.json             submit the completed requirements brief for viewer approval
@@ -1667,7 +1675,7 @@ function cmdStatus(p, { flags }) {
     if (active) for (const name of outOfScope(p, snap.run, active)) console.log(`  warning: ${active.id} also changed ${name}, which it doesn't list in its repos`);
   }
   const server = liveServer(p);
-  if (server) console.log(`  viewer: ${server.url}`);
+  if (server) console.log(server.url ? `  viewer: ${server.url}` : `  api: ${server.api} (headless; token in ${path.relative(p.root, p.serverFile)})`);
   console.log(`  next: ${snap.next}`);
 }
 
@@ -1784,7 +1792,7 @@ function cmdRuns(p, { flags }) {
   }
 }
 
-// ── the viewer server, run in the background ─────────────────────────────────
+// ── the API server (and its viewer), run in the background ───────────────────
 
 function processAlive(pid) {
   try {
@@ -1811,17 +1819,53 @@ async function healthy(info) {
   }
 }
 
+/** How a server was asked for: its port, whether it mounts the viewer, and which origins it allows. */
+function serveOptions(flags) {
+  const port = Number(stringFlag(flags, 'port') || DEFAULT_PORT);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) fail(`--port must be 0–65535, not '${flags.port}'`);
+  if (flags['allow-origin'] === true) fail('--allow-origin needs a value, e.g. --allow-origin http://localhost:5173');
+  const { parseOrigins } = require('./server');
+  const allowOrigins = parseOrigins(stringFlag(flags, 'allow-origin') ? flags['allow-origin'].split(',').map(s => s.trim()).filter(Boolean) : []);
+  return { port, headless: flags.headless === true, allowOrigins };
+}
+
+/** What `serve` prints, for the viewer or for a headless API. */
+function announceServer(info, reused) {
+  if (info.url) {
+    console.log(`theseus: viewer ${reused ? 'already running' : 'running'} — open ${info.url}`);
+    if (!reused) console.log('theseus: give the human this link; it updates live and is where they approve.');
+  } else {
+    console.log(`theseus: API ${reused ? 'already running' : 'running'} (headless) at ${info.api} — token ${info.token}`);
+    if (!reused) console.log('theseus: point the UI that will show the run at it; the human approves there. Routes: api.md.');
+  }
+  if (info.allowOrigins && info.allowOrigins.length) console.log(`theseus: cross-origin calls allowed from ${info.allowOrigins.join(', ')}`);
+  console.log(`theseus: stops itself after ${IDLE_HOURS}h idle (nothing is deleted); run theseus.js serve to bring it back.`);
+}
+
 async function cmdServe(p, { flags }) {
   const { run } = loadRun(p);
   if (run.briefRequired && !run.brief) fail('finish and submit the requirements brief before starting the viewer: theseus.js brief --file F');
-  const port = Number(stringFlag(flags, 'port') || DEFAULT_PORT);
-  if (!Number.isInteger(port) || port < 0 || port > 65535) fail(`--port must be 0–65535, not '${flags.port}'`);
+  const { port, headless, allowOrigins } = serveOptions(flags);
 
   if (flags.foreground) {
     const { startServer } = require('./server');
-    const server = await startServer(p, { port });
-    writeJson(p.serverFile, { pid: process.pid, port: server.port, token: server.token, url: server.url, started: new Date().toISOString() });
-    const cleanup = () => {
+    const ui = headless ? null : require('./viewer/viewer').viewer();
+    let cleanup;
+    const onIdle = ({ since }) => {
+      console.log(`theseus: no activity since ${since}; stopping after ${IDLE_HOURS}h idle. Run state is untouched — theseus.js serve restarts the server.`);
+      cleanup();
+    };
+    const server = await startServer(p, { port, ui, allowOrigins, idleMs: idleMs(), onIdle });
+    writeJson(p.serverFile, {
+      pid: process.pid,
+      port: server.port,
+      token: server.token,
+      api: server.api,
+      url: server.url,
+      allowOrigins: server.allowOrigins,
+      started: new Date().toISOString(),
+    });
+    cleanup = () => {
       try {
         const info = readJson(p.serverFile, null);
         if (info && info.pid === process.pid) fs.rmSync(p.serverFile, { force: true });
@@ -1832,18 +1876,24 @@ async function cmdServe(p, { flags }) {
     };
     process.on('SIGTERM', cleanup);
     process.on('SIGINT', cleanup);
-    console.log(`theseus viewer: ${server.url}`);
+    console.log(server.url ? `theseus viewer: ${server.url}` : `theseus api: ${server.api}`);
     return new Promise(() => {});
   }
 
   const existing = liveServer(p);
   if (existing && (await healthy(existing))) {
-    console.log(`theseus: viewer already running — open ${existing.url}`);
+    const sameShape = Boolean(existing.url) === !headless
+      && [...(existing.allowOrigins || [])].sort().join(',') === [...allowOrigins].sort().join(',');
+    if (!sameShape) fail(`a server is already running with other options (${existing.url ? 'viewer' : 'headless'}${existing.allowOrigins && existing.allowOrigins.length ? `, allowing ${existing.allowOrigins.join(', ')}` : ''}) — run theseus.js stop first`);
+    announceServer(existing, true);
     return;
   }
   fs.rmSync(p.serverFile, { force: true });
   const out = fs.openSync(p.serverLog, 'a');
-  const child = spawn(process.execPath, [__filename, 'serve', '--foreground', '--port', String(port)], {
+  const args = [__filename, 'serve', '--foreground', '--port', String(port)];
+  if (headless) args.push('--headless');
+  if (allowOrigins.length) args.push('--allow-origin', allowOrigins.join(','));
+  const child = spawn(process.execPath, args, {
     cwd: p.root,
     detached: true,
     stdio: ['ignore', out, out],
@@ -1854,25 +1904,24 @@ async function cmdServe(p, { flags }) {
   while (Date.now() < deadline) {
     const info = readJson(p.serverFile, null);
     if (info && (await healthy(info))) {
-      console.log(`theseus: viewer running — open ${info.url}`);
-      console.log('theseus: give the human this link; it updates live and is where they approve.');
+      announceServer(info, false);
       return;
     }
     await new Promise(resolve => setTimeout(resolve, 100));
   }
-  fail(`the viewer did not start within 10s — see ${path.relative(p.root, p.serverLog)}`);
+  fail(`the server did not start within 10s — see ${path.relative(p.root, p.serverLog)}`);
 }
 
 function cmdStop(p) {
   const info = liveServer(p);
   if (!info) {
     fs.rmSync(p.serverFile, { force: true });
-    console.log('theseus: no viewer running');
+    console.log('theseus: no server running');
     return;
   }
   process.kill(info.pid, 'SIGTERM');
   fs.rmSync(p.serverFile, { force: true });
-  console.log(`theseus: viewer stopped (pid ${info.pid})`);
+  console.log(`theseus: ${info.url ? 'viewer' : 'API server'} stopped (pid ${info.pid})`);
 }
 
 // ── custom agent files that pin a model ──────────────────────────────────────

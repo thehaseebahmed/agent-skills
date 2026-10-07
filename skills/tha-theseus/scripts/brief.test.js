@@ -12,6 +12,7 @@ const { spawnSync, spawn } = require('node:child_process');
 const SCRIPT = path.join(__dirname, 'theseus.js');
 const core = require('./theseus');
 const { startServer } = require('./server');
+const { viewer } = require('./viewer/viewer');
 
 function env() {
   const copy = { ...process.env };
@@ -99,7 +100,7 @@ test('feature and bug briefs enforce the requirements schema', () => {
 test('viewer renders, requests changes on, and approves the richer requirements brief', async () => {
   const dir = run();
   ok(dir, 'brief', '--file', file(dir, 'brief', BUG_BRIEF));
-  const server = await startServer(core.resolvePaths(dir), { port: 0 });
+  const server = await startServer(core.resolvePaths(dir), { port: 0, ui: viewer() });
   const post = (route, body) => fetch(`http://127.0.0.1:${server.port}${route}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-theseus-token': server.token }, body: JSON.stringify(body || {}) });
   try {
     const page = await (await fetch(`http://127.0.0.1:${server.port}/?t=${server.token}`)).text();

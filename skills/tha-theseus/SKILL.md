@@ -41,6 +41,14 @@ Node 20+, and has no dependencies.
 The human follows the run in a **live viewer**: a local page that `theseus serve`
 starts and prints a link to. It shows every checkpoint, gate, test output, reviewer
 verdict, screenshot and learning as it happens, and it is where the human approves.
+The viewer is one client of a local API. When the human follows the run in another
+product's UI, start it with `theseus serve --headless` and see [api.md](api.md).
+
+The server stops itself after six hours with no request and no change to the run, so
+a forgotten one never lingers. Only the process ends; `.theseus/` is untouched. If the
+link stops working, or `theseus status` shows no `viewer:` line, run `theseus serve`
+again: the run resumes where it was and the human gets a new link. Don't treat a dead
+server as a problem with the run.
 
 ## When to Use
 
@@ -402,7 +410,8 @@ When every checkpoint is done, the human tries the whole feature as a user would
   viewer (or keeps the run open). Then:
   - a `summary.json` is saved
   - the run moves to History
-  - run `theseus stop` if no other run needs the viewer
+  - run `theseus stop` if no other run needs the viewer (if you forget, it stops
+    itself after six idle hours)
 
   Under `unattended`, the PR description lists every deferred approval from
   `theseus status`.
