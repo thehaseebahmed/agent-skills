@@ -118,7 +118,7 @@ test('viewer renders, requests changes on, and approves the richer requirements 
   const post = (route, body) => fetch(`http://127.0.0.1:${server.port}${route}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-theseus-token': server.token }, body: JSON.stringify(body || {}) });
   try {
     const page = await (await fetch(`http://127.0.0.1:${server.port}/?t=${server.token}`)).text();
-    assert.match(page, /Requirements brief/);
+    assert.match(page, /Requirements plan/);
     assert.match((await (await post('/api/feedback', { brief: true, text: 'add an acceptance criterion' })).json()).message, /Changes requested on the plan/);
     ok(dir, 'brief', '--file', file(dir, 'brief2', BUG_BRIEF));
     assert.match((await (await post('/api/approve-brief')).json()).message, /Requirements plan approved/);

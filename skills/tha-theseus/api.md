@@ -85,10 +85,12 @@ approving; never let the agent call these routes for them.
 | GET | `/api/runs` | | Every run: `{ key, status, active, place, done, total, lastActivity }` |
 | GET | `/api/events` | | Server-sent events. Each `data:` line is the same JSON as `/api/state`, sent on connect and again whenever it changes |
 | GET | `/evidence/CP/FILE` | | A screenshot from that checkpoint's evidence, by the file names in `screenshots` |
-| POST | `/api/approve-brief` | | Confirms the requirements brief |
-| POST | `/api/approve-plan` | | Approves the planned checkpoints with the current settings |
+| POST | `/api/approve-implementation-plan` | | Confirms the requirements plan |
+| POST | `/api/approve-checkpoints` | | Approves the planned checkpoints with the current settings |
+| POST | `/api/approve-brief` | | Legacy alias for `/api/approve-implementation-plan` |
+| POST | `/api/approve-plan` | | Legacy alias for `/api/approve-checkpoints` |
 | POST | `/api/approve/CP` | | Approves a checkpoint awaiting approval; refused unless all its gates pass on the current code |
-| POST | `/api/feedback` | `{ text, cp?, brief? }` | Feedback to the agent. With `cp` on a checkpoint awaiting approval, requests changes and sends it back to building. With `brief: true`, requests changes on the brief |
+| POST | `/api/feedback` | `{ text, cp?, brief?, plan? }` | Feedback to the agent. With `cp` on a checkpoint awaiting approval, requests changes and sends it back to building. With `brief: true` or `plan: true`, requests changes on the plan |
 | POST | `/api/settings` | `{ autonomy?, granularity?, visual?, reviewers? }` | Changes run settings, in any direction. Valid values come from `settings.options` in the state |
 | POST | `/api/switch` | `{ key }` | Makes another run the active one and pauses the current one |
 | POST | `/api/close` | `{ decision }` | Answers the agent's request to complete or abandon the run: `confirm` or `keep` |
@@ -99,8 +101,8 @@ approving; never let the agent call these routes for them.
 --full` prints. The fields a UI needs:
 
 - `run`: the run's key, reference, settings and, while it is being settled,
-  `brief` (with `status` `pending`, `draft` after changes are requested, or
-  `confirmed`).
+  `plan` (with `status` `pending`, `draft` after changes are requested, or
+  `confirmed`). `brief` is exposed as a compatibility alias for `plan`.
 - `settings`: the current value of each setting, plus `options`. That is the one
   spec of each setting's label and choices. Each choice has `value`, `short`, `text`,
   `hint`, `current` and `available`. Render choices from it rather than
