@@ -1,8 +1,9 @@
 'use strict';
 
 /**
- * Tests for the viewer server, started in-process against a throwaway git
- * repo, plus the background `serve` / `stop` lifecycle through the CLI.
+ * Tests for the API server, with and without the bundled viewer mounted,
+ * started in-process against a throwaway git repo, plus the background
+ * `serve` / `stop` lifecycle through the CLI.
  */
 
 const test = require('node:test');
@@ -13,7 +14,8 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const core = require('./theseus');
-const { startServer } = require('./server');
+const { startServer, API_VERSION } = require('./server');
+const { viewer } = require('./viewer/viewer');
 
 const SCRIPT = path.join(__dirname, 'theseus.js');
 const { requirementsBrief } = require('./brief-fixture');
@@ -82,10 +84,10 @@ function toAwaiting(dir, p) {
   assert.strictEqual(cli(dir, 'advance', 'CP1').code, 1);
 }
 
-async function withServer(fn) {
+async function withServer(fn, options = { ui: viewer() }) {
   const dir = planned();
   const p = core.resolvePaths(dir);
-  const server = await startServer(p, { port: 0 });
+  const server = await startServer(p, { port: 0, ...options });
   const api = (route, opts = {}) =>
     fetch(`http://127.0.0.1:${server.port}${route}`, {
       ...opts,
@@ -234,7 +236,78 @@ test('serve starts a background viewer, reuses it, and stop ends it', async () =
   }
   await new Promise(resolve => setTimeout(resolve, 300));
   await assert.rejects(fetch(url[1]));
-  assert.match(ok(dir, 'stop').out, /no viewer running/);
+  assert.match(ok(dir, 'stop').out, /no server running/);
+});
+
+test('headless, the server has no page but the whole API', () =>
+  withServer(async ({ server, api }) => {
+    assert.strictEqual(server.url, null);
+    const page = await fetch(`http://127.0.0.1:${server.port}/`);
+    assert.strictEqual(page.status, 404);
+    assert.deepStrictEqual(await (await api('/api/health')).json(), { ok: true, api: API_VERSION, ui: false });
+    const state = await (await api('/api/state')).json();
+    assert.strictEqual(state.run.key, 'HR-7');
+    const res = await api('/api/approve-plan', { method: 'POST' });
+    assert.strictEqual(res.status, 200);
+  }, {}));
+
+test('with the viewer mounted, health says so and the page lives at / only', () =>
+  withServer(async ({ server, api }) => {
+    assert.deepStrictEqual(await (await api('/api/health')).json(), { ok: true, api: API_VERSION, ui: true });
+    assert.strictEqual(server.url, `http://127.0.0.1:${server.port}/?t=${server.token}`);
+    assert.strictEqual((await fetch(`http://127.0.0.1:${server.port}/viewer.html`)).status, 404);
+  }));
+
+test('only allowed origins get CORS headers, and they still need the token', () =>
+  withServer(async ({ server, api }) => {
+    const base = `http://127.0.0.1:${server.port}`;
+    const preflight = await fetch(`${base}/api/approve-plan`, {
+      method: 'OPTIONS',
+      headers: { origin: 'http://localhost:5173', 'access-control-request-method': 'POST', 'access-control-request-headers': 'content-type, x-theseus-token' },
+    });
+    assert.strictEqual(preflight.status, 204);
+    assert.strictEqual(preflight.headers.get('access-control-allow-origin'), 'http://localhost:5173');
+    assert.match(preflight.headers.get('access-control-allow-headers'), /x-theseus-token/);
+
+    const allowed = await api('/api/state', { headers: { origin: 'http://localhost:5173' } });
+    assert.strictEqual(allowed.headers.get('access-control-allow-origin'), 'http://localhost:5173');
+
+    const stranger = await api('/api/state', { headers: { origin: 'http://evil.example' } });
+    assert.strictEqual(stranger.headers.get('access-control-allow-origin'), null);
+    const strangerPreflight = await fetch(`${base}/api/state`, { method: 'OPTIONS', headers: { origin: 'http://evil.example' } });
+    assert.strictEqual(strangerPreflight.status, 403);
+
+    const tokenless = await fetch(`${base}/api/state`, { headers: { origin: 'http://localhost:5173' } });
+    assert.strictEqual(tokenless.status, 401);
+    assert.strictEqual(tokenless.headers.get('access-control-allow-origin'), 'http://localhost:5173', 'so the client can read why');
+  }, { allowOrigins: ['http://localhost:5173/'] }));
+
+test('allowed origins must be http(s) origins', async () => {
+  const p = core.resolvePaths(planned());
+  await assert.rejects(startServer(p, { port: 0, allowOrigins: ['localhost:5173'] }), /must be an http or https origin|is not a URL/);
+  await assert.rejects(startServer(p, { port: 0, allowOrigins: ['file:///tmp/x.html'] }), /must be an http or https origin/);
+});
+
+test('serve --headless starts the API alone, and a differently-shaped serve is refused', async () => {
+  const dir = planned();
+  const first = ok(dir, 'serve', '--port', '0', '--headless', '--allow-origin', 'http://localhost:5173');
+  const found = /API running \(headless\) at (http:\/\/127\.0\.0\.1:\d+) — token ([0-9a-f]{32})/.exec(first.out);
+  assert.ok(found, `no API line in: ${first.out}`);
+  assert.match(first.out, /cross-origin calls allowed from http:\/\/localhost:5173/);
+  try {
+    const health = await fetch(`${found[1]}/api/health?t=${found[2]}`);
+    assert.deepStrictEqual(await health.json(), { ok: true, api: API_VERSION, ui: false });
+    assert.strictEqual((await fetch(`${found[1]}/`)).status, 404);
+    assert.match(ok(dir, 'status').out, new RegExp(`api: ${found[1].replace(/\./g, '\\.')} \\(headless`));
+    const info = JSON.parse(fs.readFileSync(path.join(dir, '.theseus', 'server.json'), 'utf8'));
+    assert.deepStrictEqual([info.api, info.token, info.url, info.allowOrigins], [found[1], found[2], null, ['http://localhost:5173']]);
+    assert.match(ok(dir, 'serve', '--port', '0', '--headless', '--allow-origin', 'http://localhost:5173').out, /API already running/);
+    const other = cli(dir, 'serve', '--port', '0');
+    assert.strictEqual(other.code, 1);
+    assert.match(other.err, /already running with other options \(headless, allowing http:\/\/localhost:5173\) — run theseus\.js stop first/);
+  } finally {
+    assert.match(ok(dir, 'stop').out, /API server stopped/);
+  }
 });
 
 test('the viewer can change any setting, and bad values are refused', () =>

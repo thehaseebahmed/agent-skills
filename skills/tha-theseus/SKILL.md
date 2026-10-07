@@ -41,6 +41,8 @@ Node 20+, and has no dependencies.
 The human follows the run in a **live viewer**: a local page that `theseus serve`
 starts and prints a link to. It shows every checkpoint, gate, test output, reviewer
 verdict, screenshot and learning as it happens, and it is where the human approves.
+The viewer is one client of a local API. When the human follows the run in another
+product's UI, start it with `theseus serve --headless` and see [api.md](api.md).
 
 ## When to Use
 

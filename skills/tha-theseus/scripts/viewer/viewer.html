@@ -217,7 +217,20 @@
 
 <script>
 (() => {
-  const token = new URLSearchParams(location.search).get('t') || '';
+  const params = new URLSearchParams(location.search);
+  const token = params.get('t') || '';
+  // The API this page talks to: its own origin by default, or ?api=ORIGIN when
+  // the page is hosted apart from the server (which must --allow-origin it).
+  const api = (() => {
+    const given = params.get('api');
+    if (!given) return '';
+    try {
+      const url = new URL(given);
+      return ['http:', 'https:'].includes(url.protocol) ? url.origin : '';
+    } catch {
+      return '';
+    }
+  })();
   const $ = id => document.getElementById(id);
   const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   let data = null;
@@ -273,7 +286,7 @@
   }
 
   async function post(url, body) {
-    const res = await fetch(`${url}?t=${encodeURIComponent(token)}`, {
+    const res = await fetch(`${api}${url}?t=${encodeURIComponent(token)}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-theseus-token': token },
       body: JSON.stringify(body || {}),
@@ -493,7 +506,7 @@
     parts.push(reviewRounds(ev, cp.fp));
     if (gate === 'visual' && cp.screenshots.length) {
       parts.push(`<div class="shots">${cp.screenshots.map(f => {
-        const src = `/evidence/${encodeURIComponent(cp.id)}/${encodeURIComponent(f)}?t=${encodeURIComponent(token)}`;
+        const src = `${api}/evidence/${encodeURIComponent(cp.id)}/${encodeURIComponent(f)}?t=${encodeURIComponent(token)}`;
         return `<a href="${src}" target="_blank" rel="noopener"><img src="${src}" alt="${esc(f)}" loading="lazy"><span>${esc(f)}</span></a>`;
       }).join('')}</div>`);
     }
@@ -680,7 +693,7 @@
     $('live').textContent = on ? 'live' : 'reconnecting…';
   }
 
-  const events = new EventSource(`/api/events?t=${encodeURIComponent(token)}`);
+  const events = new EventSource(`${api}/api/events?t=${encodeURIComponent(token)}`);
   events.onopen = () => setLive(true);
   events.onerror = () => setLive(false);
   async function viewRun(key) {
@@ -691,7 +704,7 @@
       render();
       return;
     }
-    const res = await fetch(`/api/state?run=${encodeURIComponent(key)}&t=${encodeURIComponent(token)}`);
+    const res = await fetch(`${api}/api/state?run=${encodeURIComponent(key)}&t=${encodeURIComponent(token)}`);
     const json = await res.json().catch(() => ({}));
     if (!res.ok) return toast(json.error || 'Could not open that run.', true);
     viewing = key;
