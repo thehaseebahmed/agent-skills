@@ -18,6 +18,17 @@ function requirementsBrief(overrides = {}) {
     risks: [],
     resolved_decisions: [],
     unresolved_questions: [],
+    rejected_alternatives: [
+      { alternative: 'Rewrite from scratch', reason: 'Too costly for the scope.' },
+    ],
+    verification: {
+      automated: [
+        { prerequisites: 'node and the repo checked out', action: 'npm run check', expected: 'all tests and validators pass' },
+      ],
+      manual: [
+        { prerequisites: 'the app running locally', action: 'submit a valid request', expected: 'the balance decreases' },
+      ],
+    },
     ...overrides,
   };
 }

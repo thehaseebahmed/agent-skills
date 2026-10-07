@@ -1008,6 +1008,18 @@ function readFeedback(p) {
 
 const BRIEF_LISTS = ['acceptance_criteria', 'checkpoint_areas', 'scope_boundaries', 'assumptions', 'risks', 'resolved_decisions', 'unresolved_questions'];
 
+/** Validate a single verification check: prerequisites, action, expected. */
+function normalizeCheck(input, kind, index) {
+  if (typeof input !== 'object' || Array.isArray(input)) fail(`verification.${kind}[${index}] must be an object`);
+  const prerequisites = typeof input.prerequisites === 'string' && input.prerequisites.trim() ? input.prerequisites.trim() : null;
+  if (!prerequisites) fail(`verification.${kind}[${index}] needs prerequisites — the state the system must be in before the check runs (or 'none')`);
+  const action = typeof input.action === 'string' && input.action.trim() ? input.action.trim() : null;
+  if (!action) fail(`verification.${kind}[${index}] needs an action — the concrete command or step to run`);
+  const expected = typeof input.expected === 'string' && input.expected.trim() ? input.expected.trim() : null;
+  if (!expected) fail(`verification.${kind}[${index}] needs an expected result — what a passing check looks like`);
+  return { prerequisites, action, expected };
+}
+
 /** Validate the completed requirements conversation before it reaches the viewer. */
 function normalizeBrief(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail('the brief must be a JSON object');
@@ -1037,6 +1049,30 @@ function normalizeBrief(input) {
   brief.checkpoint_areas = list('checkpoint_areas', true);
   for (const key of ['scope_boundaries', 'assumptions', 'risks', 'resolved_decisions', 'unresolved_questions']) brief[key] = list(key);
   if (brief.unresolved_questions.length) fail("the brief has unresolved questions — resolve them or record an explicit user-approved assumption before submitting it");
+  // Rejected alternatives: at least one entry; each must name the alternative and why it was rejected.
+  // An empty list is allowed only as a single entry whose alternative is 'none considered' with a reason
+  // explaining why no alternatives were evaluated — not silently.
+  if (!Array.isArray(input.rejected_alternatives)) fail("the brief has no 'rejected_alternatives' list — include it even when it is empty");
+  if (input.rejected_alternatives.length === 0) fail("the brief has no 'rejected_alternatives' — record at least one genuinely considered alternative, or a single entry with alternative 'none considered' and a reason explaining why");
+  const alts = input.rejected_alternatives.map((entry, i) => {
+    if (typeof entry !== 'object' || Array.isArray(entry)) fail(`rejected_alternatives[${i}] must be an object with 'alternative' and 'reason'`);
+    const alternative = typeof entry.alternative === 'string' && entry.alternative.trim() ? entry.alternative.trim() : null;
+    if (!alternative) fail(`rejected_alternatives[${i}] needs an 'alternative' — name the approach that was rejected`);
+    const reason = typeof entry.reason === 'string' && entry.reason.trim() ? entry.reason.trim() : null;
+    if (!reason) fail(`rejected_alternatives[${i}] needs a 'reason' — say briefly why this alternative was rejected`);
+    return { alternative, reason };
+  });
+  brief.rejected_alternatives = alts;
+  // Verification: actionable automated and manual checks covering the complete implementation.
+  if (typeof input.verification !== 'object' || Array.isArray(input.verification)) fail("the brief has no 'verification' — include automated and manual checks covering the complete implementation");
+  if (!Array.isArray(input.verification.automated)) fail("the brief has no 'verification.automated' list — include it even when it is empty");
+  if (input.verification.automated.length === 0) fail("the brief has no 'verification.automated' — record at least one automated check (a command, its prerequisites, and its expected result), or a single entry with action 'not applicable' and a reason");
+  if (!Array.isArray(input.verification.manual)) fail("the brief has no 'verification.manual' list — include it even when it is empty");
+  if (input.verification.manual.length === 0) fail("the brief has no 'verification.manual' — record at least one manual check (a step, its prerequisites, and its expected result), or a single entry with action 'not applicable' and a reason");
+  brief.verification = {
+    automated: input.verification.automated.map((c, i) => normalizeCheck(c, 'automated', i)),
+    manual: input.verification.manual.map((c, i) => normalizeCheck(c, 'manual', i)),
+  };
   return brief;
 }
 

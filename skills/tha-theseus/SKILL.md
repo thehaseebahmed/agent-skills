@@ -255,7 +255,7 @@ theseus init --key HR-7 --reference "legacy/LeaveForm.tsx + docs/mock.html" \
 
 ### Step 1b: Submit the resolved requirements brief
 
-After the conversation and focused review are complete, submit this concise document:
+After the conversation and focused review are complete, submit this concise document, organized in four parts:
 
 ```json
 {
@@ -265,15 +265,34 @@ After the conversation and focused review are complete, submit this concise docu
   "current_behavior": "required for bugs; optional for features",
   "expected_behavior": "the intended behavior",
   "acceptance_criteria": ["observable outcomes"],
+  "scope_boundaries": ["what is explicitly out of scope"],
   "user_proposed_approach": "what the user suggested",
   "reviewed_approach": "what code and standards review found about that proposal",
   "recommended_approach": "the approach the agent recommends",
   "approach_rationale": "why this approach fits the codebase and requirements",
+  "rejected_alternatives": [
+    { "alternative": "the approach considered and rejected", "reason": "why it was rejected" }
+  ],
   "checkpoint_areas": ["areas the planner must cover"],
-  "scope_boundaries": [], "assumptions": [], "risks": [],
-  "resolved_decisions": [], "unresolved_questions": []
+  "assumptions": [], "risks": [], "resolved_decisions": [], "unresolved_questions": [],
+  "verification": {
+    "automated": [
+      { "prerequisites": "the state the system must be in (or 'none')", "action": "the concrete command to run", "expected": "what a passing check looks like" }
+    ],
+    "manual": [
+      { "prerequisites": "the state the system must be in (or 'none')", "action": "the concrete step to perform", "expected": "what a passing check looks like" }
+    ]
+  }
 }
 ```
+
+The four parts, in order:
+1. **Overview** — `task`, `goal`, `current_behavior` (bugs), `expected_behavior`, `acceptance_criteria`, `scope_boundaries`.
+2. **User-proposed implementation** — `user_proposed_approach`, faithfully describing what the user had in mind. State "none offered" if the user supplied no proposal.
+3. **Recommended implementation** — `reviewed_approach`, `recommended_approach`, `approach_rationale`, `rejected_alternatives` (each with a brief reason), `checkpoint_areas`, `assumptions`, `risks`, `resolved_decisions`.
+4. **Verification** — `verification.automated` and `verification.manual`, each listing actionable checks with prerequisites, the command or step, and the expected result. Use a single entry with `action: "not applicable"` and a reason in `expected` when a category genuinely does not apply.
+
+`rejected_alternatives` must record genuinely considered options, not filler. An empty list is not accepted silently — if no alternatives were evaluated, submit a single entry `{ "alternative": "none considered", "reason": "why no alternatives were evaluated" }`.
 
 ```bash
 theseus brief --file brief.json
@@ -283,8 +302,9 @@ theseus wait     # the human confirms it, or requests changes, in the viewer
 
 - **Changes requested:** read them (`theseus inbox`), revise, and submit again.
 - **`plan` is refused** until a valid requirements brief is confirmed in the viewer.
-- The script rejects missing required fields, a bug without `current_behavior`, or
-  any non-empty `unresolved_questions` list.
+- The script rejects missing required fields, a bug without `current_behavior`, any
+  non-empty `unresolved_questions` list, missing or malformed `rejected_alternatives`,
+  or missing/incomplete `verification` (automated and manual).
 
 Only after confirmation do the expensive work: pre-flight, deep reading and the
 planner subagent.

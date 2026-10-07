@@ -42,6 +42,18 @@ function file(dir, name, value) {
   return full;
 }
 
+const REJECTED_ALTERNATIVES = [
+  { alternative: 'Rewrite from scratch', reason: 'Too costly for the agreed scope.' },
+  { alternative: 'Copy the structure unchanged', reason: 'It couples validation and display.' },
+];
+const VERIFICATION = {
+  automated: [
+    { prerequisites: 'node and the repo checked out', action: 'npm run check', expected: 'all tests and validators pass' },
+  ],
+  manual: [
+    { prerequisites: 'the app running locally', action: 'submit a valid request', expected: 'the balance decreases' },
+  ],
+};
 const BRIEF = {
   task: 'Port the leave request screen to SwiftUI',
   goal: 'Deliver the leave-request workflow with the agreed behavior.',
@@ -58,6 +70,8 @@ const BRIEF = {
   risks: ['The legacy half-day rule needs regression coverage.'],
   resolved_decisions: ['Keep the existing half-day behavior.'],
   unresolved_questions: [],
+  rejected_alternatives: REJECTED_ALTERNATIVES,
+  verification: VERIFICATION,
 };
 const BUG_BRIEF = { ...BRIEF, task: 'Fix leave validation message', change_type: 'bug', current_behavior: 'A request beyond the balance is accepted without an error.' };
 const PLAN = [{ title: 'Balance rule', done: 'd', ui: false, tests: ['t'] }];
@@ -127,6 +141,62 @@ test('unattended autonomy is viewer-only after brief approval', () => {
   core.approveBrief(core.resolvePaths(dir), { by: 'human (viewer)', source: 'viewer' });
   core.setSettings(core.resolvePaths(dir), { autonomy: 'unattended' }, { source: 'viewer' });
   assert.strictEqual(JSON.parse(ok(dir, 'status', '--json').out).run.autonomy, 'unattended');
+});
+
+test('a brief without rejected_alternatives is rejected', () => {
+  const dir = run();
+  const noAlts = { ...BRIEF };
+  delete noAlts.rejected_alternatives;
+  refused(dir, /has no 'rejected_alternatives'/, 'brief', '--file', file(dir, 'noalts', noAlts));
+});
+
+test('a brief with a rejected_alternative missing a reason is rejected', () => {
+  const dir = run();
+  const badAlts = { ...BRIEF, rejected_alternatives: [{ alternative: 'Rewrite from scratch' }] };
+  refused(dir, /rejected_alternatives.*reason/, 'brief', '--file', file(dir, 'badalts', badAlts));
+});
+
+test('a brief with a rejected_alternative missing the alternative text is rejected', () => {
+  const dir = run();
+  const badAlts = { ...BRIEF, rejected_alternatives: [{ reason: 'Too costly.' }] };
+  refused(dir, /rejected_alternatives.*alternative/, 'brief', '--file', file(dir, 'badalts2', badAlts));
+});
+
+test('a brief without verification is rejected', () => {
+  const dir = run();
+  const noVer = { ...BRIEF };
+  delete noVer.verification;
+  refused(dir, /has no 'verification'/, 'brief', '--file', file(dir, 'nover', noVer));
+});
+
+test('a brief without automated verification checks is rejected', () => {
+  const dir = run();
+  const noAuto = { ...BRIEF, verification: { ...VERIFICATION, automated: [] } };
+  refused(dir, /has no 'verification.automated'/, 'brief', '--file', file(dir, 'noauto', noAuto));
+});
+
+test('a brief without manual verification checks is rejected', () => {
+  const dir = run();
+  const noManual = { ...BRIEF, verification: { ...VERIFICATION, manual: [] } };
+  refused(dir, /has no 'verification.manual'/, 'brief', '--file', file(dir, 'nomanual', noManual));
+});
+
+test('a brief with an automated check missing an expected result is rejected', () => {
+  const dir = run();
+  const badAuto = { ...BRIEF, verification: { ...VERIFICATION, automated: [{ prerequisites: 'node', action: 'npm test' }] } };
+  refused(dir, /verification.automated.*expected/, 'brief', '--file', file(dir, 'badauto', badAuto));
+});
+
+test('a brief with a manual check missing an action is rejected', () => {
+  const dir = run();
+  const badManual = { ...BRIEF, verification: { ...VERIFICATION, manual: [{ prerequisites: 'app running', expected: 'balance decreases' }] } };
+  refused(dir, /verification.manual.*action/, 'brief', '--file', file(dir, 'badmanual', badManual));
+});
+
+test('a brief with empty rejected_alternatives and no explanation is rejected', () => {
+  const dir = run();
+  const emptyAlts = { ...BRIEF, rejected_alternatives: [] };
+  refused(dir, /rejected_alternatives/, 'brief', '--file', file(dir, 'emptyalts', emptyAlts));
 });
 
 test('wait wakes when the viewer confirms the requirements brief', async () => {
