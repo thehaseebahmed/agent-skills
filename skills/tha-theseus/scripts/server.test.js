@@ -117,15 +117,25 @@ test('state carries the run, every checkpoint and the next action', () =>
     assert.strictEqual(state.run.approvals, undefined, 'the approvals setting is gone');
     assert.deepStrictEqual(state.checkpoints.map(c => [c.id, c.status, c.approved]), [['CP1', 'pending', false], ['CP2', 'pending', false]]);
     assert.match(state.next, /human approves the plan \(CP1, CP2\) in the viewer/);
+    // The one settings spec, served to the page that renders the chips.
+    assert.deepStrictEqual(
+      { autonomy: state.settings.autonomy, granularity: state.settings.granularity, visual: state.settings.visual, reviewers: state.settings.reviewers },
+      { autonomy: 'step', granularity: 's-m', visual: 'on', reviewers: '2' },
+    );
+    assert.deepStrictEqual(Object.keys(state.settings.options), ['autonomy', 'granularity', 'visual', 'reviewers']);
+    assert.strictEqual(state.settings.options.granularity.options.find(o => o.value === 's-m').current, true);
+    assert.strictEqual(state.settings.options.autonomy.options.find(o => o.value === 'unattended').available, true, 'the brief is confirmed in this fixture');
   }));
 
 test('approving the plan in the viewer records it as the viewer', () =>
   withServer(async ({ dir, api }) => {
     const res = await api('/api/approve-plan', { method: 'POST' });
     assert.strictEqual(res.status, 200);
-    assert.strictEqual((await res.json()).message, 'Approved CP1, CP2.');
+    assert.strictEqual((await res.json()).message, 'Approved CP1, CP2 — the run proceeds with every checkpoint · visual on · 2 code reviewers.');
     const snap = JSON.parse(ok(dir, 'status', '--json', '--full').out);
     assert.deepStrictEqual(snap.checkpoints[0].plannedBy, { by: 'human (viewer)', source: 'viewer' });
+    const entry = snap.log.find(e => e.event === 'plan-approved');
+    assert.deepStrictEqual(entry.settings, { autonomy: 'step', granularity: 's-m', visual: 'on', reviewers: '2' });
     const again = await api('/api/approve-plan', { method: 'POST' });
     assert.strictEqual(again.status, 409);
     assert.match((await again.json()).error, /nothing to approve/);

@@ -225,35 +225,6 @@
   const drafts = {};
   const open = {};
 
-  const SETTINGS = {
-    autonomy: {
-      label: 'approve',
-      options: [
-        { value: 'step', short: 'every checkpoint', text: 'Every checkpoint', hint: 'You approve each one in here.' },
-        { value: 'batch:2', short: 'every 2 checkpoints', text: 'Every 2 checkpoints', hint: 'One approval covers the next two.' },
-        { value: 'batch:3', short: 'every 3 checkpoints', text: 'Every 3 checkpoints', hint: 'One approval covers the next three.' },
-        { value: 'batch:5', short: 'every 5 checkpoints', text: 'Every 5 checkpoints', hint: 'One approval covers the next five.' },
-        { value: 'unattended', short: 'in the PR', text: 'Only in the PR', hint: 'The agent stops asking; you review the pull request.' },
-      ],
-    },
-    visual: {
-      label: 'visual review',
-      fallback: 'on',
-      options: [
-        { value: 'on', short: 'on', text: 'On', hint: 'UI checkpoints are compared with the reference by two blind reviewers.' },
-        { value: 'off', short: 'off', text: 'Off', hint: 'Skip the visual comparison for every checkpoint.' },
-      ],
-    },
-    reviewers: {
-      label: 'code reviewers',
-      fallback: '2',
-      options: [
-        { value: '2', short: '2', text: 'Two reviewers', hint: 'Two independent reviewers; both must be clean.' },
-        { value: '1', short: '1', text: 'One reviewer', hint: 'One reviewer, who must be clean.' },
-        { value: '0', short: 'none', text: 'No code review', hint: 'Skip code review for every checkpoint.' },
-      ],
-    },
-  };
   let openMenu = null;
   let live = null;      // the active run, as the server streams it
   let viewing = null;   // key of another run being looked at, read-only
@@ -346,14 +317,17 @@
     const r = data.run;
     $('key').textContent = r.key;
     const ro = isReadOnly();
-    // Each setting is a chip. Clicking it lists the choices; picking one saves it at once.
-    $('chips').innerHTML = runPicker(r.key) + Object.entries(SETTINGS).map(([key, def]) => {
-      const current = r[key] === undefined ? def.fallback : String(r[key]);
+    // Each setting is a chip, rendered from the spec the server serves: one
+    // source for the values, the choices and which of them is available now.
+    const spec = (data.settings && data.settings.options) || {};
+    const currentOf = key => data.settings ? String(data.settings[key]) : '';
+    $('chips').innerHTML = runPicker(r.key) + Object.entries(spec).map(([key, def]) => {
+      const current = currentOf(key);
       const opened = openMenu === key;
       const choice = def.options.find(o => o.value === current);
       const label = `${def.label}: ${choice ? choice.short : current}`;
       const menu = opened ? `<div class="menu" role="menu">${def.options.map(o => {
-        const unavailable = key === 'autonomy' && o.value === 'unattended' && (!r.brief || r.brief.status !== 'confirmed');
+        const unavailable = o.available === false;
         return `
         <button role="menuitemradio" aria-checked="${o.value === current}" data-setting="${key}" data-to="${esc(o.value)}"${o.value === current || unavailable ? ' disabled' : ''}>
           <span class="tick">${o.value === current ? '✓' : ''}</span><span>${esc(o.text)}<small>${esc(o.hint)}</small></span>
@@ -384,7 +358,7 @@
     }
     const unapproved = data.checkpoints.filter(c => !c.approved);
     if (unapproved.length) {
-      out.push(`<div class="banner"><p><b>${unapproved.length} checkpoint${unapproved.length > 1 ? 's' : ''} need your approval</b> before any code is written (${unapproved.map(c => esc(c.id)).join(', ')}). Read each one's done-criteria and tests below.</p><button class="btn primary" id="approve-plan">Approve plan</button></div>`);
+      out.push(`<div class="banner"><p><b>${unapproved.length} checkpoint${unapproved.length > 1 ? 's' : ''} need your approval</b> before any code is written (${unapproved.map(c => esc(c.id)).join(', ')}). Read each one's done-criteria and tests below. Approving starts the run with the settings in the header chips — set them now if you want different ones.</p><button class="btn primary" id="approve-plan">Approve plan</button></div>`);
     }
     const waiting = data.checkpoints.find(c => c.status === 'awaiting-approval');
     if (waiting) {
