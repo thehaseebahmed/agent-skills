@@ -368,26 +368,15 @@ test('API requests and changes to the run both count as activity', async () => {
   }
 });
 
-test('idleMs 0 turns idle shutdown off', async () => {
-  const p = core.resolvePaths(planned());
-  await sleep(50);
-  const idle = [];
-  const server = await startServer(p, { port: 0, idleMs: 0, onIdle: info => idle.push(info) });
-  try {
-    await sleep(300);
-    assert.deepStrictEqual(idle, []);
-  } finally {
-    await server.close();
-  }
-});
-
 test('a background server stops itself when idle, leaves the run alone, and serve brings it back', async () => {
   const dir = planned();
-  const first = ok(dir, 'serve', '--port', '0', '--idle-hours', '0.0003'); // ~1s
-  assert.match(first.out, /stops itself after 0\.0003h idle \(nothing is deleted\)/);
+  // THESEUS_IDLE_MS is the tests' way to shorten the fixed six hours.
+  const first = spawnSync(process.execPath, [SCRIPT, 'serve', '--port', '0'], { cwd: dir, encoding: 'utf8', env: { ...env(), THESEUS_IDLE_MS: '1000' } });
+  assert.strictEqual(first.status, 0, first.stderr);
+  first.out = first.stdout;
+  assert.match(first.out, /stops itself after 6h idle \(nothing is deleted\)/);
   const url = /open (http:\/\/127\.0\.0\.1:\d+\/\?t=[0-9a-f]{32})/.exec(first.out)[1];
   const info = JSON.parse(fs.readFileSync(path.join(dir, '.theseus', 'server.json'), 'utf8'));
-  assert.strictEqual(info.idleHours, 0.0003);
   const before = fs.readFileSync(path.join(dir, '.theseus', 'current', 'run.json'), 'utf8');
   let gone = false;
   for (let i = 0; i < 100 && !gone; i++) {
@@ -402,18 +391,9 @@ test('a background server stops itself when idle, leaves the run alone, and serv
   await assert.rejects(fetch(url));
   assert.strictEqual(fs.existsSync(path.join(dir, '.theseus', 'server.json')), false, 'its record is removed');
   assert.strictEqual(fs.readFileSync(path.join(dir, '.theseus', 'current', 'run.json'), 'utf8'), before, 'the run is untouched');
-  assert.match(fs.readFileSync(path.join(dir, '.theseus', 'server.log'), 'utf8'), /stopping after 0\.0003h idle/);
+  assert.match(fs.readFileSync(path.join(dir, '.theseus', 'server.log'), 'utf8'), /stopping after 6h idle/);
   const again = ok(dir, 'serve', '--port', '0');
   assert.match(again.out, /viewer running — open http/);
   assert.match(again.out, /stops itself after 6h idle/);
   ok(dir, 'stop');
-});
-
-test('--idle-hours must be 0 or a positive number', () => {
-  const dir = planned();
-  for (const bad of ['-1', 'soon']) {
-    const r = cli(dir, 'serve', '--idle-hours', bad);
-    assert.strictEqual(r.code, 1);
-    assert.match(r.err, new RegExp(`--idle-hours must be 0 \\(never\\) or a positive number of hours, not '${bad}'`));
-  }
 });

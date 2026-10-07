@@ -101,7 +101,7 @@ function parseOrigins(list) {
  * the same origin. It is reached without the token, so it must only serve
  * static, run-independent content. Without it the server is headless.
  *
- * Idle shutdown: once `idleMs` (default six hours; 0 turns it off) pass with no
+ * Idle shutdown: once `idleMs` (six hours; the option is a seam for tests) pass with no
  * API request and no change to the run's files, `onIdle` is called. It only
  * stops the process: `.theseus/` is not touched, so `theseus serve` brings the
  * server back with the run intact. An open viewer tab does not count as

@@ -33,7 +33,9 @@ const MAX_STOP_BLOCKS = 3;
 const OUTPUT_TAIL_LINES = 40;
 const LOG_LIMIT = 200;
 const DEFAULT_PORT = 4747;
-const DEFAULT_IDLE_HOURS = 6;
+const IDLE_HOURS = 6; // fixed on purpose: not a setting
+/** The idle limit in ms. THESEUS_IDLE_MS exists for the tests alone, so they need not wait six hours. */
+const idleMs = () => Number(process.env.THESEUS_IDLE_MS) > 0 ? Number(process.env.THESEUS_IDLE_MS) : IDLE_HOURS * 3600 * 1000;
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const AUTONOMY = /^(step|unattended|batch:[1-9]\d*)$/;
 const GRANULARITY = ['xs-s', 's-m'];
@@ -57,8 +59,8 @@ const USAGE = `usage: theseus.js <command> [args]
                                       start the API server and its viewer in the background; prints the link.
                                       --headless serves the API alone, for another product's UI (see api.md);
                                       --allow-origin lets a page on that origin call it (it still needs the token)
-                                      the server stops itself after 6 hours idle (--idle-hours N; 0 = never);
-                                      nothing is deleted, and serve brings it back
+                                      the server stops itself after 6 hours idle; nothing is deleted,
+                                      and serve brings it back
   stop                                stop the server
   plan --file checkpoints.json        load the checkpoint list (replaces an unstarted plan)
   add --file checkpoints.json         append checkpoints, e.g. from human feedback
@@ -1824,9 +1826,7 @@ function serveOptions(flags) {
   if (flags['allow-origin'] === true) fail('--allow-origin needs a value, e.g. --allow-origin http://localhost:5173');
   const { parseOrigins } = require('./server');
   const allowOrigins = parseOrigins(stringFlag(flags, 'allow-origin') ? flags['allow-origin'].split(',').map(s => s.trim()).filter(Boolean) : []);
-  const idleHours = flags['idle-hours'] === undefined ? DEFAULT_IDLE_HOURS : Number(flags['idle-hours']);
-  if (!Number.isFinite(idleHours) || idleHours < 0) fail(`--idle-hours must be 0 (never) or a positive number of hours, not '${flags['idle-hours']}'`);
-  return { port, headless: flags.headless === true, allowOrigins, idleHours };
+  return { port, headless: flags.headless === true, allowOrigins };
 }
 
 /** What `serve` prints, for the viewer or for a headless API. */
@@ -1839,23 +1839,23 @@ function announceServer(info, reused) {
     if (!reused) console.log('theseus: point the UI that will show the run at it; the human approves there. Routes: api.md.');
   }
   if (info.allowOrigins && info.allowOrigins.length) console.log(`theseus: cross-origin calls allowed from ${info.allowOrigins.join(', ')}`);
-  if (info.idleHours) console.log(`theseus: stops itself after ${info.idleHours}h idle (nothing is deleted); run theseus.js serve to bring it back.`);
+  console.log(`theseus: stops itself after ${IDLE_HOURS}h idle (nothing is deleted); run theseus.js serve to bring it back.`);
 }
 
 async function cmdServe(p, { flags }) {
   const { run } = loadRun(p);
   if (run.briefRequired && !run.brief) fail('finish and submit the requirements brief before starting the viewer: theseus.js brief --file F');
-  const { port, headless, allowOrigins, idleHours } = serveOptions(flags);
+  const { port, headless, allowOrigins } = serveOptions(flags);
 
   if (flags.foreground) {
     const { startServer } = require('./server');
     const ui = headless ? null : require('./viewer/viewer').viewer();
     let cleanup;
     const onIdle = ({ since }) => {
-      console.log(`theseus: no activity since ${since}; stopping after ${idleHours}h idle. Run state is untouched — theseus.js serve restarts the server.`);
+      console.log(`theseus: no activity since ${since}; stopping after ${IDLE_HOURS}h idle. Run state is untouched — theseus.js serve restarts the server.`);
       cleanup();
     };
-    const server = await startServer(p, { port, ui, allowOrigins, idleMs: idleHours * 3600 * 1000, onIdle });
+    const server = await startServer(p, { port, ui, allowOrigins, idleMs: idleMs(), onIdle });
     writeJson(p.serverFile, {
       pid: process.pid,
       port: server.port,
@@ -1863,7 +1863,6 @@ async function cmdServe(p, { flags }) {
       api: server.api,
       url: server.url,
       allowOrigins: server.allowOrigins,
-      idleHours,
       started: new Date().toISOString(),
     });
     cleanup = () => {
@@ -1894,7 +1893,6 @@ async function cmdServe(p, { flags }) {
   const args = [__filename, 'serve', '--foreground', '--port', String(port)];
   if (headless) args.push('--headless');
   if (allowOrigins.length) args.push('--allow-origin', allowOrigins.join(','));
-  args.push('--idle-hours', String(idleHours));
   const child = spawn(process.execPath, args, {
     cwd: p.root,
     detached: true,

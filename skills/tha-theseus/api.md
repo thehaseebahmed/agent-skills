@@ -17,7 +17,7 @@ theseus serve --headless --allow-origin http://localhost:5173   # and let that p
 
 It prints `API running (headless) at http://127.0.0.1:PORT — token TOKEN`. A
 program can read the same details from `.theseus/server.json`
-(`{ pid, port, token, api, url, allowOrigins, idleHours, started }`, where `url` is `null`
+(`{ pid, port, token, api, url, allowOrigins, started }`, where `url` is `null`
 when headless). `theseus stop` ends it. Node code can also embed the server:
 `require('<skill>/scripts/server').startServer(paths, { port, allowOrigins, ui })`,
 with `paths` from `require('<skill>/scripts/theseus').resolvePaths(dir)`.
@@ -27,8 +27,9 @@ run's files. An open viewer tab alone does not keep it alive. Only the process
 exits; `.theseus/` is untouched, and `theseus serve` starts it again with the run
 as it was, under a new token. A UI should treat a dropped connection as "server
 may have stopped": ask the agent to restart it rather than reporting a broken
-run. `--idle-hours N` changes the limit and `0` turns it off. Embedders pass
-`idleMs` and `onIdle` to `startServer`; without `onIdle` nothing is stopped.
+run. The limit is fixed. Embedders get the same behaviour by passing `onIdle` to
+`startServer`, which is called when the server has gone idle; without it nothing
+is stopped.
 
 The rules do not change with the UI. Approvals still cannot come from the agent's
 CLI. Whatever UI calls these routes is where the human approves, and every

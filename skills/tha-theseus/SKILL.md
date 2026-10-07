@@ -48,7 +48,7 @@ The server stops itself after six hours with no request and no change to the run
 a forgotten one never lingers. Only the process ends; `.theseus/` is untouched. If the
 link stops working, or `theseus status` shows no `viewer:` line, run `theseus serve`
 again: the run resumes where it was and the human gets a new link. Don't treat a dead
-server as a problem with the run. `--idle-hours N` changes the limit (`0` = never).
+server as a problem with the run.
 
 ## When to Use
 
