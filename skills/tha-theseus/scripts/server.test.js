@@ -322,3 +322,98 @@ test('the viewer can change any setting, and bad values are refused', () =>
     const anon = await fetch(`http://127.0.0.1:${server.port}/api/settings`, { method: 'POST', body: '{"autonomy":"step"}' });
     assert.strictEqual(anon.status, 401);
   }));
+
+// ── idle shutdown ────────────────────────────────────────────────────────────
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+test('an untouched server reports itself idle, after the idle time and not before', async () => {
+  const p = core.resolvePaths(planned());
+  await sleep(50); // let the files written by planned() age past the mark
+  const idle = [];
+  const server = await startServer(p, { port: 0, idleMs: 400, onIdle: info => idle.push(info) });
+  try {
+    await sleep(150);
+    assert.deepStrictEqual(idle, [], 'not yet');
+    await sleep(700);
+    assert.ok(idle.length >= 1, 'idle after 400ms of nothing');
+    assert.strictEqual(idle[0].idleMs, 400);
+    assert.match(idle[0].since, /^\d{4}-\d\d-\d\dT/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('API requests and changes to the run both count as activity', async () => {
+  const dir = planned();
+  const p = core.resolvePaths(dir);
+  await sleep(50);
+  const idle = [];
+  const server = await startServer(p, { port: 0, idleMs: 600, onIdle: info => idle.push(info) });
+  try {
+    for (let i = 0; i < 4; i++) {
+      await sleep(250);
+      await fetch(`http://127.0.0.1:${server.port}/api/health?t=${server.token}`);
+    }
+    assert.deepStrictEqual(idle, [], 'requests every 250ms keep a 600ms limit at bay');
+    for (let i = 0; i < 4; i++) {
+      await sleep(250);
+      core.setSettings(p, { visual: i % 2 ? 'on' : 'off' }, { source: 'viewer' }); // writes the run's files, as the agent working does
+    }
+    assert.deepStrictEqual(idle, [], 'so do writes to the run, with no request at all');
+    await sleep(1000);
+    assert.ok(idle.length >= 1, 'and then it does go idle');
+  } finally {
+    await server.close();
+  }
+});
+
+test('idleMs 0 turns idle shutdown off', async () => {
+  const p = core.resolvePaths(planned());
+  await sleep(50);
+  const idle = [];
+  const server = await startServer(p, { port: 0, idleMs: 0, onIdle: info => idle.push(info) });
+  try {
+    await sleep(300);
+    assert.deepStrictEqual(idle, []);
+  } finally {
+    await server.close();
+  }
+});
+
+test('a background server stops itself when idle, leaves the run alone, and serve brings it back', async () => {
+  const dir = planned();
+  const first = ok(dir, 'serve', '--port', '0', '--idle-hours', '0.0003'); // ~1s
+  assert.match(first.out, /stops itself after 0\.0003h idle \(nothing is deleted\)/);
+  const url = /open (http:\/\/127\.0\.0\.1:\d+\/\?t=[0-9a-f]{32})/.exec(first.out)[1];
+  const info = JSON.parse(fs.readFileSync(path.join(dir, '.theseus', 'server.json'), 'utf8'));
+  assert.strictEqual(info.idleHours, 0.0003);
+  const before = fs.readFileSync(path.join(dir, '.theseus', 'current', 'run.json'), 'utf8');
+  let gone = false;
+  for (let i = 0; i < 100 && !gone; i++) {
+    await sleep(100);
+    try {
+      process.kill(info.pid, 0);
+    } catch {
+      gone = true;
+    }
+  }
+  assert.ok(gone, 'the server process exited by itself');
+  await assert.rejects(fetch(url));
+  assert.strictEqual(fs.existsSync(path.join(dir, '.theseus', 'server.json')), false, 'its record is removed');
+  assert.strictEqual(fs.readFileSync(path.join(dir, '.theseus', 'current', 'run.json'), 'utf8'), before, 'the run is untouched');
+  assert.match(fs.readFileSync(path.join(dir, '.theseus', 'server.log'), 'utf8'), /stopping after 0\.0003h idle/);
+  const again = ok(dir, 'serve', '--port', '0');
+  assert.match(again.out, /viewer running — open http/);
+  assert.match(again.out, /stops itself after 6h idle/);
+  ok(dir, 'stop');
+});
+
+test('--idle-hours must be 0 or a positive number', () => {
+  const dir = planned();
+  for (const bad of ['-1', 'soon']) {
+    const r = cli(dir, 'serve', '--idle-hours', bad);
+    assert.strictEqual(r.code, 1);
+    assert.match(r.err, new RegExp(`--idle-hours must be 0 \\(never\\) or a positive number of hours, not '${bad}'`));
+  }
+});

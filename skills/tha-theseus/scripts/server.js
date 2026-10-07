@@ -26,6 +26,9 @@ const { GateError, snapshot, approvePlan, advance, addFeedback, setSettings, don
 /** Bumped on any breaking change to the routes or payloads in ../api.md. */
 const API_VERSION = 1;
 const TICK_MS = 1000;
+/** A server nobody has touched for this long stops itself; the run's data stays on disk. */
+const DEFAULT_IDLE_MS = 6 * 60 * 60 * 1000;
+const IDLE_CHECK_MS = 60 * 1000;
 const MAX_BODY = 64 * 1024;
 
 function send(res, status, body, type = 'application/json; charset=utf-8') {
@@ -97,8 +100,14 @@ function parseOrigins(list) {
  * any route outside the API before answering 404; it is how a UI is mounted on
  * the same origin. It is reached without the token, so it must only serve
  * static, run-independent content. Without it the server is headless.
+ *
+ * Idle shutdown: once `idleMs` (default six hours; 0 turns it off) pass with no
+ * API request and no change to the run's files, `onIdle` is called. It only
+ * stops the process: `.theseus/` is not touched, so `theseus serve` brings the
+ * server back with the run intact. An open viewer tab does not count as
+ * activity on its own, or a forgotten tab would keep the server alive for ever.
  */
-function startServer(p, { port = 0, token = crypto.randomBytes(16).toString('hex'), allowOrigins = [], ui = null } = {}) {
+function startServer(p, { port = 0, token = crypto.randomBytes(16).toString('hex'), allowOrigins = [], ui = null, idleMs = DEFAULT_IDLE_MS, onIdle = null } = {}) {
   let origins;
   try {
     origins = new Set(parseOrigins(allowOrigins));
@@ -134,9 +143,32 @@ function startServer(p, { port = 0, token = crypto.randomBytes(16).toString('hex
   const timer = setInterval(broadcast, TICK_MS);
   timer.unref();
 
+  // The newest of: the last API request, and the last write to the run's files
+  // (the agent working moves those, with no request reaching this server).
+  let touched = Date.now();
+  const lastActivity = () => {
+    let latest = touched;
+    for (const file of [p.runFile, p.cpFile, p.logFile]) {
+      try {
+        latest = Math.max(latest, fs.statSync(file).mtimeMs);
+      } catch {
+        // not written yet
+      }
+    }
+    return latest;
+  };
+  let idleTimer = null;
+  if (idleMs > 0 && onIdle) {
+    idleTimer = setInterval(() => {
+      if (Date.now() - lastActivity() >= idleMs) onIdle({ idleMs, since: new Date(lastActivity()).toISOString() });
+    }, Math.min(IDLE_CHECK_MS, Math.max(idleMs / 2, 10)));
+    idleTimer.unref();
+  }
+
   const handler = async (req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1');
     const route = url.pathname;
+    touched = Date.now();
     const isApi = route.startsWith('/api/') || route.startsWith('/evidence/');
 
     // A cross-origin client gets CORS headers only if its origin was allowed.
@@ -263,9 +295,11 @@ function startServer(p, { port = 0, token = crypto.randomBytes(16).toString('hex
         api,
         url: ui ? `${api}/?t=${token}` : null,
         allowOrigins: [...origins],
+        idleMs: idleTimer ? idleMs : 0,
         close: () =>
           new Promise(resolve => {
             clearInterval(timer);
+            if (idleTimer) clearInterval(idleTimer);
             for (const res of clients) res.end();
             server.close(() => resolve());
           }),
@@ -273,4 +307,4 @@ function startServer(p, { port = 0, token = crypto.randomBytes(16).toString('hex
     });
 }
 
-module.exports = { startServer, parseOrigins, API_VERSION };
+module.exports = { startServer, parseOrigins, API_VERSION, DEFAULT_IDLE_MS };
