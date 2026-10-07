@@ -65,7 +65,11 @@ a missing `node`.
   link. In Claude Code on your own machine, open it in a browser to follow the run and
   approve checkpoints. Theseus requires a human who can open that viewer; it does
   not offer chat or CLI approval as a fallback. If the chosen environment cannot
-  expose the local viewer, use a viewer-accessible environment for the run.
+  expose the local viewer, use a viewer-accessible environment for the run. When
+  Claude Code runs inside a container whose port you publish, set
+  `THESEUS_HOST=0.0.0.0` in it so the viewer listens beyond the container's loopback;
+  the exposure this brings is described under Access in
+  [the skill's api.md](../skills/tha-theseus/api.md#access).
 - **Several repos:** start the session in the folder that holds them and run
   `theseus.js init --repos api,web …` there. The Stop hook finds that run from inside
   any of the listed repos. Run `theseus.js agents` in that same folder, since Claude

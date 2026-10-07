@@ -10,9 +10,11 @@
  * in ../api.md. Every approval made through it is recorded with source "viewer",
  * meaning a human-facing UI rather than the agent's CLI.
  *
- * It binds to 127.0.0.1 only, and every API and evidence request must carry
- * the random token, so another page open in the same browser can neither read
- * the run nor approve anything. Cross-origin clients are refused unless their
+ * It binds to 127.0.0.1 unless told otherwise (`host`, e.g. 0.0.0.0 inside a
+ * container whose port is published), and every API and evidence request must
+ * carry the random token, so another page open in the same browser, or another
+ * machine that can reach a wider bind, can neither read the run nor approve
+ * anything. Cross-origin clients are refused unless their
  * origin is listed in `allowOrigins`, and even then still need the token.
  */
 
@@ -20,6 +22,7 @@ const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const net = require('node:net');
 
 const { GateError, snapshot, approvePlan, advance, addFeedback, setSettings, doneMessage, approveBrief, listRuns, findRun, withRunDir, switchRun, closeRun, IMAGE_TYPES } = require('./theseus');
 
@@ -92,9 +95,35 @@ function parseOrigins(list) {
   });
 }
 
+const DEFAULT_HOST = '127.0.0.1';
+
+/** Check a bind address: an IP literal only, so no name lookup decides what is exposed. */
+function parseHost(value) {
+  const host = String(value ?? '').trim().replace(/^\[(.*)\]$/, '$1');
+  if (!net.isIP(host)) throw new GateError(`host '${value}' is not an IP address — give one like 127.0.0.1, or 0.0.0.0 for every interface`);
+  return host;
+}
+
+/** True for a bind that other machines (or a container's host) can reach. */
+function isExposed(host) {
+  return !(host === '::1' || /^127\./.test(host));
+}
+
+/** The address a client on this machine dials for a server bound to `host`. */
+function dialHost(host) {
+  if (host === '0.0.0.0') return '127.0.0.1';
+  if (host === '::') return '[::1]';
+  return net.isIPv6(host) ? `[${host}]` : host;
+}
+
 /**
  * Start the API server for the run at paths `p`. Resolves once listening.
  * Falls back to an OS-assigned port when the requested one is taken.
+ *
+ * `host` is the address to bind, 127.0.0.1 by default. 0.0.0.0 (or ::) listens
+ * on every interface, which is what a server inside a Docker container needs
+ * for a published port to reach it; anyone who can reach that port can then
+ * load the viewer page, and only the token keeps them out of the run.
  *
  * `ui`, when given, is a request handler `(req, res, url) => boolean` tried for
  * any route outside the API before answering 404; it is how a UI is mounted on
@@ -107,9 +136,10 @@ function parseOrigins(list) {
  * server back with the run intact. An open viewer tab does not count as
  * activity on its own, or a forgotten tab would keep the server alive for ever.
  */
-function startServer(p, { port = 0, token = crypto.randomBytes(16).toString('hex'), allowOrigins = [], ui = null, idleMs = DEFAULT_IDLE_MS, onIdle = null } = {}) {
+function startServer(p, { port = 0, host = DEFAULT_HOST, token = crypto.randomBytes(16).toString('hex'), allowOrigins = [], ui = null, idleMs = DEFAULT_IDLE_MS, onIdle = null } = {}) {
   let origins;
   try {
+    host = parseHost(host);
     origins = new Set(parseOrigins(allowOrigins));
   } catch (error) {
     return Promise.reject(error);
@@ -278,7 +308,7 @@ function startServer(p, { port = 0, token = crypto.randomBytes(16).toString('hex
       };
       server.once('error', onError);
       server.once('listening', onListening);
-      server.listen(wanted, '127.0.0.1');
+      server.listen(wanted, host);
     });
 
   return listen(port)
@@ -288,9 +318,10 @@ function startServer(p, { port = 0, token = crypto.randomBytes(16).toString('hex
     })
     .then(() => {
       const actual = server.address().port;
-      const api = `http://127.0.0.1:${actual}`;
+      const api = `http://${dialHost(host)}:${actual}`;
       return {
         port: actual,
+        host,
         token,
         api,
         url: ui ? `${api}/?t=${token}` : null,
@@ -307,4 +338,4 @@ function startServer(p, { port = 0, token = crypto.randomBytes(16).toString('hex
     });
 }
 
-module.exports = { startServer, parseOrigins, API_VERSION, DEFAULT_IDLE_MS };
+module.exports = { startServer, parseOrigins, parseHost, isExposed, API_VERSION, DEFAULT_IDLE_MS, DEFAULT_HOST };

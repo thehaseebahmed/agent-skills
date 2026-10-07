@@ -55,10 +55,12 @@ const USAGE = `usage: theseus.js <command> [args]
                                       one run across several repos (from the folder holding them)
   config [--autonomy …] [--granularity …] [--visual on|off] [--reviewers 0|1|2]
                                       change agent-side settings; approvals are always made in the viewer
-  serve [--port ${DEFAULT_PORT}] [--headless] [--allow-origin URL[,URL]]
+  serve [--port ${DEFAULT_PORT}] [--host 127.0.0.1] [--headless] [--allow-origin URL[,URL]]
                                       start the API server and its viewer in the background; prints the link.
                                       --headless serves the API alone, for another product's UI (see api.md);
-                                      --allow-origin lets a page on that origin call it (it still needs the token)
+                                      --allow-origin lets a page on that origin call it (it still needs the token);
+                                      --host 0.0.0.0 (or THESEUS_HOST) listens on every interface, e.g. inside
+                                      a Docker container — anyone who can reach the port sees the page
                                       the server stops itself after 6 hours idle; nothing is deleted,
                                       and serve brings it back
   stop                                stop the server
@@ -1812,21 +1814,27 @@ function liveServer(p) {
 
 async function healthy(info) {
   try {
-    const res = await fetch(`http://127.0.0.1:${info.port}/api/health?t=${info.token}`);
+    const res = await fetch(`${info.api || `http://127.0.0.1:${info.port}`}/api/health?t=${info.token}`);
     return res.ok;
   } catch {
     return false;
   }
 }
 
-/** How a server was asked for: its port, whether it mounts the viewer, and which origins it allows. */
+/**
+ * How a server was asked for: its port and bind address, whether it mounts the
+ * viewer, and which origins it allows. THESEUS_HOST stands in for --host, so a
+ * container can set it once instead of every agent remembering the flag.
+ */
 function serveOptions(flags) {
   const port = Number(stringFlag(flags, 'port') || DEFAULT_PORT);
   if (!Number.isInteger(port) || port < 0 || port > 65535) fail(`--port must be 0–65535, not '${flags.port}'`);
   if (flags['allow-origin'] === true) fail('--allow-origin needs a value, e.g. --allow-origin http://localhost:5173');
-  const { parseOrigins } = require('./server');
+  if (flags.host === true) fail('--host needs a value, e.g. --host 0.0.0.0');
+  const { parseOrigins, parseHost, DEFAULT_HOST } = require('./server');
   const allowOrigins = parseOrigins(stringFlag(flags, 'allow-origin') ? flags['allow-origin'].split(',').map(s => s.trim()).filter(Boolean) : []);
-  return { port, headless: flags.headless === true, allowOrigins };
+  const host = parseHost(stringFlag(flags, 'host') || (process.env.THESEUS_HOST || '').trim() || DEFAULT_HOST);
+  return { port, host, headless: flags.headless === true, allowOrigins };
 }
 
 /** What `serve` prints, for the viewer or for a headless API. */
@@ -1839,13 +1847,16 @@ function announceServer(info, reused) {
     if (!reused) console.log('theseus: point the UI that will show the run at it; the human approves there. Routes: api.md.');
   }
   if (info.allowOrigins && info.allowOrigins.length) console.log(`theseus: cross-origin calls allowed from ${info.allowOrigins.join(', ')}`);
+  if (info.host && require('./server').isExposed(info.host)) {
+    console.log(`theseus: listening on ${info.host}, not just this machine — anyone who can reach port ${info.port} can load the page; only the token guards the run. Share the link only with the human.`);
+  }
   console.log(`theseus: stops itself after ${IDLE_HOURS}h idle (nothing is deleted); run theseus.js serve to bring it back.`);
 }
 
 async function cmdServe(p, { flags }) {
   const { run } = loadRun(p);
   if (run.briefRequired && !run.brief) fail('finish and submit the requirements brief before starting the viewer: theseus.js brief --file F');
-  const { port, headless, allowOrigins } = serveOptions(flags);
+  const { port, host, headless, allowOrigins } = serveOptions(flags);
 
   if (flags.foreground) {
     const { startServer } = require('./server');
@@ -1855,10 +1866,11 @@ async function cmdServe(p, { flags }) {
       console.log(`theseus: no activity since ${since}; stopping after ${IDLE_HOURS}h idle. Run state is untouched — theseus.js serve restarts the server.`);
       cleanup();
     };
-    const server = await startServer(p, { port, ui, allowOrigins, idleMs: idleMs(), onIdle });
+    const server = await startServer(p, { port, host, ui, allowOrigins, idleMs: idleMs(), onIdle });
     writeJson(p.serverFile, {
       pid: process.pid,
       port: server.port,
+      host: server.host,
       token: server.token,
       api: server.api,
       url: server.url,
@@ -1882,15 +1894,17 @@ async function cmdServe(p, { flags }) {
 
   const existing = liveServer(p);
   if (existing && (await healthy(existing))) {
+    const existingHost = existing.host || '127.0.0.1';
     const sameShape = Boolean(existing.url) === !headless
+      && existingHost === host
       && [...(existing.allowOrigins || [])].sort().join(',') === [...allowOrigins].sort().join(',');
-    if (!sameShape) fail(`a server is already running with other options (${existing.url ? 'viewer' : 'headless'}${existing.allowOrigins && existing.allowOrigins.length ? `, allowing ${existing.allowOrigins.join(', ')}` : ''}) — run theseus.js stop first`);
+    if (!sameShape) fail(`a server is already running with other options (${existing.url ? 'viewer' : 'headless'}, on ${existingHost}${existing.allowOrigins && existing.allowOrigins.length ? `, allowing ${existing.allowOrigins.join(', ')}` : ''}) — run theseus.js stop first`);
     announceServer(existing, true);
     return;
   }
   fs.rmSync(p.serverFile, { force: true });
   const out = fs.openSync(p.serverLog, 'a');
-  const args = [__filename, 'serve', '--foreground', '--port', String(port)];
+  const args = [__filename, 'serve', '--foreground', '--port', String(port), '--host', host];
   if (headless) args.push('--headless');
   if (allowOrigins.length) args.push('--allow-origin', allowOrigins.join(','));
   const child = spawn(process.execPath, args, {

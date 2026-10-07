@@ -14,7 +14,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const core = require('./theseus');
-const { startServer, API_VERSION } = require('./server');
+const { startServer, API_VERSION, parseHost, isExposed } = require('./server');
 const { viewer } = require('./viewer/viewer');
 
 const SCRIPT = path.join(__dirname, 'theseus.js');
@@ -288,6 +288,62 @@ test('allowed origins must be http(s) origins', async () => {
   await assert.rejects(startServer(p, { port: 0, allowOrigins: ['file:///tmp/x.html'] }), /must be an http or https origin/);
 });
 
+/** This machine's first non-loopback IPv4 address, to prove what a bind exposes; null when it has none. */
+function outsideAddress() {
+  const found = Object.values(os.networkInterfaces()).flat().find(a => a && a.family === 'IPv4' && !a.internal);
+  return found ? found.address : null;
+}
+
+test('the server binds 127.0.0.1 unless given another IP address', async () => {
+  const outside = outsideAddress();
+  await withServer(async ({ server }) => {
+    assert.strictEqual(server.host, '127.0.0.1');
+    assert.strictEqual(server.api, `http://127.0.0.1:${server.port}`);
+    if (outside) await assert.rejects(fetch(`http://${outside}:${server.port}/api/health`), 'the default bind is unreachable from other interfaces');
+  }, {});
+  await withServer(async ({ server, api }) => {
+    assert.strictEqual(server.host, '0.0.0.0');
+    assert.strictEqual(server.url, `http://127.0.0.1:${server.port}/?t=${server.token}`, 'the link dials loopback, not 0.0.0.0');
+    assert.strictEqual((await api('/api/health')).status, 200);
+    assert.strictEqual((await fetch(`http://127.0.0.1:${server.port}/api/state`)).status, 401, 'a wide bind still needs the token');
+    if (outside) assert.strictEqual((await fetch(`http://${outside}:${server.port}/api/state?t=${server.token}`)).status, 200, 'reachable from other interfaces');
+  }, { ui: viewer(), host: '0.0.0.0' });
+  assert.strictEqual(parseHost('[::]'), '::');
+  assert.deepStrictEqual(['127.0.0.1', '127.0.0.2', '::1', '0.0.0.0', '::', '172.17.0.2'].map(isExposed), [false, false, false, true, true, true]);
+  const p = core.resolvePaths(planned());
+  await assert.rejects(startServer(p, { port: 0, host: 'localhost' }), /host 'localhost' is not an IP address/);
+});
+
+test('serve --host 0.0.0.0, or THESEUS_HOST, listens on every interface and warns that it does', async () => {
+  const dir = planned();
+  const run = (extra, ...args) => {
+    const r = spawnSync(process.execPath, [SCRIPT, ...args], { cwd: dir, encoding: 'utf8', env: { ...env(), ...extra } });
+    return { code: r.status, out: r.stdout, err: r.stderr };
+  };
+  const first = run({ THESEUS_HOST: '0.0.0.0' }, 'serve', '--port', '0');
+  assert.strictEqual(first.code, 0, first.err);
+  const url = /open (http:\/\/127\.0\.0\.1:\d+\/\?t=[0-9a-f]{32})/.exec(first.out);
+  assert.ok(url, `no link in: ${first.out}`);
+  assert.match(first.out, /listening on 0\.0\.0\.0, not just this machine — anyone who can reach port \d+ can load the page; only the token guards the run/);
+  try {
+    const info = JSON.parse(fs.readFileSync(path.join(dir, '.theseus', 'server.json'), 'utf8'));
+    assert.strictEqual(info.host, '0.0.0.0');
+    assert.strictEqual((await fetch(url[1].replace('/?t=', '/api/health?t='))).status, 200);
+    assert.match(ok(dir, 'serve', '--port', '0', '--host', '0.0.0.0').out, /viewer already running/);
+    const narrower = cli(dir, 'serve', '--port', '0');
+    assert.strictEqual(narrower.code, 1);
+    assert.match(narrower.err, /already running with other options \(viewer, on 0\.0\.0\.0\) — run theseus\.js stop first/);
+  } finally {
+    assert.match(ok(dir, 'stop').out, /viewer stopped/);
+  }
+  const bad = cli(dir, 'serve', '--port', '0', '--host', 'everywhere');
+  assert.strictEqual(bad.code, 1);
+  assert.match(bad.err, /host 'everywhere' is not an IP address/);
+  assert.match(cli(dir, 'serve', '--host').err, /--host needs a value/);
+  assert.doesNotMatch(ok(dir, 'serve', '--port', '0').out, /listening on/, 'the default bind says nothing about exposure');
+  ok(dir, 'stop');
+});
+
 test('serve --headless starts the API alone, and a differently-shaped serve is refused', async () => {
   const dir = planned();
   const first = ok(dir, 'serve', '--port', '0', '--headless', '--allow-origin', 'http://localhost:5173');
@@ -304,7 +360,7 @@ test('serve --headless starts the API alone, and a differently-shaped serve is r
     assert.match(ok(dir, 'serve', '--port', '0', '--headless', '--allow-origin', 'http://localhost:5173').out, /API already running/);
     const other = cli(dir, 'serve', '--port', '0');
     assert.strictEqual(other.code, 1);
-    assert.match(other.err, /already running with other options \(headless, allowing http:\/\/localhost:5173\) — run theseus\.js stop first/);
+    assert.match(other.err, /already running with other options \(headless, on 127\.0\.0\.1, allowing http:\/\/localhost:5173\) — run theseus\.js stop first/);
   } finally {
     assert.match(ok(dir, 'stop').out, /API server stopped/);
   }

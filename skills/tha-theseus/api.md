@@ -17,9 +17,9 @@ theseus serve --headless --allow-origin http://localhost:5173   # and let that p
 
 It prints `API running (headless) at http://127.0.0.1:PORT — token TOKEN`. A
 program can read the same details from `.theseus/server.json`
-(`{ pid, port, token, api, url, allowOrigins, started }`, where `url` is `null`
+(`{ pid, port, host, token, api, url, allowOrigins, started }`, where `url` is `null`
 when headless). `theseus stop` ends it. Node code can also embed the server:
-`require('<skill>/scripts/server').startServer(paths, { port, allowOrigins, ui })`,
+`require('<skill>/scripts/server').startServer(paths, { port, host, allowOrigins, ui })`,
 with `paths` from `require('<skill>/scripts/theseus').resolvePaths(dir)`.
 
 The server stops itself after six hours with no API request and no change to the
@@ -38,7 +38,23 @@ approving; never let the agent call these routes for them.
 
 ## Access
 
-- The server listens on `127.0.0.1` only.
+- The server listens on `127.0.0.1` by default, so only the same machine can reach it.
+- `--host ADDRESS` (or the `THESEUS_HOST` environment variable; the flag wins)
+  binds another address. It must be an IP literal; host names are refused so no
+  name lookup decides what is exposed. Use `--host 0.0.0.0` (or `::`) when the
+  server runs inside a container, such as a Docker sandbox, and the browser is
+  outside it: a server on the container's loopback cannot be reached through a
+  published port. Pin `--port` too, because a taken port otherwise falls back to a
+  random one that nothing publishes. The printed link and `api` still dial
+  `127.0.0.1`, which is what both the container and a host publishing the same
+  port number use; with a different host port, swap the port in the link.
+- **What a wide bind exposes.** Anyone who can reach the port, which with
+  `0.0.0.0` on a machine that is not sandboxed can mean the whole network, can load
+  the viewer page. The token is then the only thing between them and reading the
+  run or approving a checkpoint, and it travels in the link over plain HTTP. Bind
+  wide only inside a container whose published port you control, prefer
+  publishing it to the host's loopback alone, and share the link with the human
+  only. `serve` prints a warning whenever it binds beyond loopback.
 - Every `/api/*` and `/evidence/*` request needs the token, either as the
   `x-theseus-token` header or as the `t` query parameter. Use the parameter for
   `EventSource` and `<img src>`, which cannot send headers. Without it the
