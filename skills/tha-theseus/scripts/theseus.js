@@ -64,9 +64,10 @@ const USAGE = `usage: theseus.js <command> [args]
                                       the server stops itself after 6 hours idle; nothing is deleted,
                                       and serve brings it back
   stop                                stop the server
-  plan --file checkpoints.json        load the checkpoint list (replaces an unstarted plan)
-  add --file checkpoints.json         append checkpoints, e.g. from human feedback
-  brief --file brief.json             submit the completed requirements brief for viewer approval
+  plan --file plan.json             submit the completed requirements plan for viewer approval
+  checkpoints --file cps.json       load the checkpoint list (replaces an unstarted set)
+  add --file checkpoints.json       append checkpoints, e.g. from human feedback
+  brief --file plan.json            legacy alias for 'plan' — submit the requirements plan
   begin CP                            start a checkpoint (needs a clean tree)
   record CP red   [--cmd C]           run the tests; they must FAIL
   record CP tests [--cmd C]           gate 1: run the tests; they must pass
@@ -414,10 +415,21 @@ function loadRun(p) {
     const resume = open.length ? `open runs: ${open.join(', ')} — resume one with theseus.js switch KEY, or ` : '';
     fail(`no active theseus run — ${resume}start one with: theseus.js init --key K --reference R --test-cmd C`);
   }
-  return { run: readJson(p.runFile), state: readJson(p.cpFile) };
+  const run = readJson(p.runFile);
+  // Compatibility: runs written by the previous version stored the requirements
+  // document as `run.brief` and the flag as `run.briefRequired`. Read them into
+  // the canonical `run.plan` / `run.planRequired` names so the rest of the code
+  // has one vocabulary. Never write the old names back.
+  if (run.brief && !run.plan) run.plan = run.brief;
+  if (run.briefRequired !== undefined && run.planRequired === undefined) run.planRequired = run.briefRequired;
+  return { run, state: readJson(p.cpFile) };
 }
 
 function save(p, run, state) {
+  // Strip legacy keys so the canonical names are the only ones on disk after
+  // the first save. The adapter in loadRun reads them; save writes only plan/planRequired.
+  if ('brief' in run) delete run.brief;
+  if ('briefRequired' in run) delete run.briefRequired;
   writeJson(p.runFile, run);
   writeJson(p.cpFile, state);
 }
@@ -777,8 +789,8 @@ function closeRun(p, decision, { source, by }) {
 
 // ── operations shared by the CLI and the viewer ──────────────────────────────
 
-function approvePlan(p, { by, source }) {
-  if (source !== 'viewer') fail('plan approval may only be recorded by the viewer');
+function approveCheckpoints(p, { by, source }) {
+  if (source !== 'viewer') fail('checkpoint approval may only be recorded by the viewer');
   const { run, state } = loadRun(p);
   const pending = state.checkpoints.filter(c => !c.approved);
   if (pending.length === 0) fail('nothing to approve — every checkpoint is already approved');
@@ -787,9 +799,12 @@ function approvePlan(p, { by, source }) {
     cp.plannedBy = { by, source };
   }
   save(p, run, state);
-  log(p, 'plan-approved', { by, source, cps: pending.map(c => c.id), settings: settingsOf(run) });
+  log(p, 'checkpoints-approved', { by, source, cps: pending.map(c => c.id), settings: settingsOf(run) });
   return { cps: pending.map(c => c.id), settings: settingsSummary(run) };
 }
+
+// Legacy alias for callers that still reference the old name.
+const approvePlan = approveCheckpoints;
 
 /**
  * Gate 4. Checks gates 1–3 at the current code, then applies the approval
@@ -917,7 +932,7 @@ const SETTINGS_SPEC = {
  */
 function settingsFor(run) {
   const values = settingsOf(run);
-  const confirmed = Boolean(run.brief && run.brief.status === 'confirmed');
+  const confirmed = Boolean(run.plan && run.plan.status === 'confirmed');
   const options = {};
   for (const [key, def] of Object.entries(SETTINGS_SPEC)) {
     const list = def.options.map(o => ({
@@ -964,8 +979,8 @@ function setSettings(p, changes, { source }) {
   const changed = Object.keys(after).filter(k => after[k] !== before[k]);
   if (changed.length === 0) fail('nothing changed — those are already the settings');
   if (after.autonomy === 'unattended') {
-    if (source !== 'viewer') fail('unattended autonomy can only be enabled in the viewer after the requirements brief is confirmed');
-    if (!run.brief || run.brief.status !== 'confirmed') fail('confirm the requirements brief in the viewer before enabling unattended autonomy');
+    if (source !== 'viewer') fail('unattended autonomy can only be enabled in the viewer after the requirements plan is confirmed');
+    if (!run.plan || run.plan.status !== 'confirmed') fail('confirm the requirements plan in the viewer before enabling unattended autonomy');
   }
   if (source === 'cli') {
     const loosens = autonomyLooseness(after.autonomy) > autonomyLooseness(before.autonomy)
@@ -1008,6 +1023,18 @@ function readFeedback(p) {
 
 const BRIEF_LISTS = ['acceptance_criteria', 'checkpoint_areas', 'scope_boundaries', 'assumptions', 'risks', 'resolved_decisions', 'unresolved_questions'];
 
+/** Validate a single verification check: prerequisites, action, expected. */
+function normalizeCheck(input, kind, index) {
+  if (typeof input !== 'object' || Array.isArray(input)) fail(`verification.${kind}[${index}] must be an object`);
+  const prerequisites = typeof input.prerequisites === 'string' && input.prerequisites.trim() ? input.prerequisites.trim() : null;
+  if (!prerequisites) fail(`verification.${kind}[${index}] needs prerequisites — the state the system must be in before the check runs (or 'none')`);
+  const action = typeof input.action === 'string' && input.action.trim() ? input.action.trim() : null;
+  if (!action) fail(`verification.${kind}[${index}] needs an action — the concrete command or step to run`);
+  const expected = typeof input.expected === 'string' && input.expected.trim() ? input.expected.trim() : null;
+  if (!expected) fail(`verification.${kind}[${index}] needs an expected result — what a passing check looks like`);
+  return { prerequisites, action, expected };
+}
+
 /** Validate the completed requirements conversation before it reaches the viewer. */
 function normalizeBrief(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail('the brief must be a JSON object');
@@ -1037,21 +1064,48 @@ function normalizeBrief(input) {
   brief.checkpoint_areas = list('checkpoint_areas', true);
   for (const key of ['scope_boundaries', 'assumptions', 'risks', 'resolved_decisions', 'unresolved_questions']) brief[key] = list(key);
   if (brief.unresolved_questions.length) fail("the brief has unresolved questions — resolve them or record an explicit user-approved assumption before submitting it");
+  // Rejected alternatives: at least one entry; each must name the alternative and why it was rejected.
+  // An empty list is allowed only as a single entry whose alternative is 'none considered' with a reason
+  // explaining why no alternatives were evaluated — not silently.
+  if (!Array.isArray(input.rejected_alternatives)) fail("the brief has no 'rejected_alternatives' list — include it even when it is empty");
+  if (input.rejected_alternatives.length === 0) fail("the brief has no 'rejected_alternatives' — record at least one genuinely considered alternative, or a single entry with alternative 'none considered' and a reason explaining why");
+  const alts = input.rejected_alternatives.map((entry, i) => {
+    if (typeof entry !== 'object' || Array.isArray(entry)) fail(`rejected_alternatives[${i}] must be an object with 'alternative' and 'reason'`);
+    const alternative = typeof entry.alternative === 'string' && entry.alternative.trim() ? entry.alternative.trim() : null;
+    if (!alternative) fail(`rejected_alternatives[${i}] needs an 'alternative' — name the approach that was rejected`);
+    const reason = typeof entry.reason === 'string' && entry.reason.trim() ? entry.reason.trim() : null;
+    if (!reason) fail(`rejected_alternatives[${i}] needs a 'reason' — say briefly why this alternative was rejected`);
+    return { alternative, reason };
+  });
+  brief.rejected_alternatives = alts;
+  // Verification: actionable automated and manual checks covering the complete implementation.
+  if (typeof input.verification !== 'object' || Array.isArray(input.verification)) fail("the brief has no 'verification' — include automated and manual checks covering the complete implementation");
+  if (!Array.isArray(input.verification.automated)) fail("the brief has no 'verification.automated' list — include it even when it is empty");
+  if (input.verification.automated.length === 0) fail("the brief has no 'verification.automated' — record at least one automated check (a command, its prerequisites, and its expected result), or a single entry with action 'not applicable' and a reason");
+  if (!Array.isArray(input.verification.manual)) fail("the brief has no 'verification.manual' list — include it even when it is empty");
+  if (input.verification.manual.length === 0) fail("the brief has no 'verification.manual' — record at least one manual check (a step, its prerequisites, and its expected result), or a single entry with action 'not applicable' and a reason");
+  brief.verification = {
+    automated: input.verification.automated.map((c, i) => normalizeCheck(c, 'automated', i)),
+    manual: input.verification.manual.map((c, i) => normalizeCheck(c, 'manual', i)),
+  };
   return brief;
 }
 
-function approveBrief(p, { by, source }) {
-  if (source !== 'viewer') fail('brief approval may only be recorded by the viewer');
+function approveReqPlan(p, { by, source }) {
+  if (source !== 'viewer') fail('plan approval may only be recorded by the viewer');
   const { run, state } = loadRun(p);
   assertOpen(run);
-  if (!run.brief) fail('there is no brief to confirm yet — the agent writes it with: theseus.js brief --file F');
-  if (run.brief.status === 'confirmed') fail('the brief is already confirmed');
-  if (run.brief.status === 'draft') fail('the brief has changes requested — wait for the agent to revise it');
-  run.brief.status = 'confirmed';
-  run.brief.confirmedBy = { by, source };
+  if (!run.plan) fail('there is no plan to confirm yet — the agent writes it with: theseus.js plan --file F');
+  if (run.plan.status === 'confirmed') fail('the plan is already confirmed');
+  if (run.plan.status === 'draft') fail('the plan has changes requested — wait for the agent to revise it');
+  run.plan.status = 'confirmed';
+  run.plan.confirmedBy = { by, source };
   save(p, run, state);
-  log(p, 'brief-approved', { by, source });
+  log(p, 'plan-approved-req', { by, source });
 }
+
+// Legacy alias for callers that still reference the old name.
+const approveBrief = approveReqPlan;
 
 /** Human feedback from the viewer. On a checkpoint awaiting approval it means "request changes". */
 function addFeedback(p, { cp: cpId, text, brief = false }) {
@@ -1059,14 +1113,15 @@ function addFeedback(p, { cp: cpId, text, brief = false }) {
   const { run, state } = loadRun(p);
   let reopened = false;
   if (brief) {
-    if (!run.brief || run.brief.status !== 'pending') fail('there is no brief waiting for review');
-    run.brief.status = 'draft';
+    // `brief: true` is the legacy selector for feedback on the requirements plan.
+    if (!run.plan || run.plan.status !== 'pending') fail('there is no plan waiting for review');
+    run.plan.status = 'draft';
     save(p, run, state);
     const feedback = readFeedback(p);
     const item = { id: feedback.items.length + 1, at: new Date().toISOString(), cp: null, brief: true, text: text.trim(), read: false };
     feedback.items.push(item);
     writeJson(p.feedback, feedback);
-    log(p, 'brief-changes-requested', { text: item.text });
+    log(p, 'plan-changes-requested', { text: item.text });
     return { item, reopened: false, brief: true };
   }
   if (cpId) {
@@ -1095,12 +1150,12 @@ function nextAction(p, state, run) {
   if (run && CLOSING[runStatus(run)]) {
     return `human confirms the run ${CLOSING[runStatus(run)]} in the viewer (or keeps it open); agent runs: theseus.js wait`;
   }
-  if (run && run.briefRequired && state.checkpoints.length === 0) {
-    if (!run.brief) return 'finish requirements discovery in chat (task, behaviour, approach and open decisions), then: theseus.js brief --file F';
-    if (run.brief.status === 'draft') return 'revise the brief from the human\'s feedback (theseus.js inbox), then: theseus.js brief --file F';
-    if (run.brief.status === 'pending') return 'human confirms the requirements brief in the viewer; agent runs: theseus.js wait';
+  if (run && run.planRequired && state.checkpoints.length === 0) {
+    if (!run.plan) return 'finish requirements discovery in chat (task, behaviour, approach and open decisions), then: theseus.js plan --file F';
+    if (run.plan.status === 'draft') return 'revise the plan from the human\'s feedback (theseus.js inbox), then: theseus.js plan --file F';
+    if (run.plan.status === 'pending') return 'human confirms the requirements plan in the viewer; agent runs: theseus.js wait';
   }
-  if (state.checkpoints.length === 0) return 'plan the checkpoints: theseus.js plan --file F';
+  if (state.checkpoints.length === 0) return 'load the checkpoints: theseus.js checkpoints --file F';
   const active = state.checkpoints.find(isActive);
   if (active) {
     if (active.status === 'awaiting-approval') {
@@ -1149,6 +1204,11 @@ function snapshot(p) {
     const isolationNone = ['visual', 'review'].some(g => evidence[g] && Object.values(evidence[g].reviewers || {}).some(r => r.isolation === 'none'));
     return { ...cp, gates, fp, evidence, screenshots: screenshots(p, cp.id), isolationNone };
   });
+  // Compatibility: expose the plan as `brief` too so viewers written against
+  // the previous API version keep rendering until they migrate. The canonical
+  // name is `plan`; `brief` is removed in the next viewer update.
+  if (run.plan) run.brief = run.plan;
+  if (run.planRequired !== undefined) run.briefRequired = run.planRequired;
   return {
     run,
     settings: settingsFor(run),
@@ -1257,7 +1317,7 @@ function cmdInit(cwd, { flags }) {
     settingsVersion: 0,
     settingsAcked: 0,
     ...(repos ? { repos } : {}),
-    briefRequired: true,
+    planRequired: true,
     created: new Date().toISOString(),
   };
   const paused = fs.existsSync(p.base) ? parkActive(p) : null;
@@ -1270,35 +1330,42 @@ function cmdInit(cwd, { flags }) {
   console.log(`theseus: run '${run.key}' started in ${path.relative(cwd, p.base) || p.base} (autonomy: ${autonomy}, checkpoint size: ${granularity})`);
   if (repos) console.log(`theseus: repos in this run: ${repos.map(x => `${x.name} (${x.path})`).join(', ')} — every gate covers all of them`);
   if (paused) console.log(`theseus: run '${paused}' is paused; resume it later with: theseus.js switch ${paused}`);
-  console.log('theseus: conduct the requirements conversation inline; inspect relevant code and standards, resolve material questions, then submit the brief: theseus.js brief --file F');
+  console.log('theseus: conduct the requirements conversation inline; inspect relevant code and standards, resolve material questions, then submit the plan: theseus.js plan --file F');
   console.log('theseus: the human then picks the run settings in the viewer (approve cadence, visual, reviewers) when approving the plan; only the checkpoint size shapes the plan itself');
-}
-
-function cmdBrief(p, { flags }) {
-  const { run, state } = loadRun(p);
-  assertOpen(run);
-  if (state.checkpoints.length) fail('the checkpoints are already planned — change direction through feedback and theseus.js add, not a new brief');
-  const brief = normalizeBrief(readJson(requireFlag(flags, 'file')));
-  run.brief = { ...brief, status: 'pending', submitted: new Date().toISOString() };
-  save(p, run, state);
-  log(p, 'brief-submitted', { areas: brief.checkpoint_areas.length });
-  console.log(`theseus: requirements brief saved (${brief.checkpoint_areas.length} checkpoint area(s)). Start the viewer now and give the human its link: theseus.js serve`);
 }
 
 function cmdPlan(p, { flags }) {
   const { run, state } = loadRun(p);
   assertOpen(run);
-  if (run.briefRequired && (!run.brief || run.brief.status !== 'confirmed')) {
-    fail('confirm the brief first — the agent writes it with theseus.js brief --file F, and the human confirms it in the viewer');
+  if (state.checkpoints.length) fail('the checkpoints are already loaded — change direction through feedback and theseus.js add, not a new plan');
+  const plan = normalizeBrief(readJson(requireFlag(flags, 'file')));
+  run.plan = { ...plan, status: 'pending', submitted: new Date().toISOString() };
+  save(p, run, state);
+  log(p, 'plan-submitted', { areas: plan.checkpoint_areas.length });
+  console.log(`theseus: requirements plan saved (${plan.checkpoint_areas.length} checkpoint area(s)). Start the viewer now and give the human its link: theseus.js serve`);
+}
+
+// Legacy alias: `theseus brief` still works, doing the same thing.
+const cmdBrief = cmdPlan;
+
+function cmdCheckpoints(p, { flags }) {
+  const { run, state } = loadRun(p);
+  assertOpen(run);
+  if (run.planRequired && (!run.plan || run.plan.status !== 'confirmed')) {
+    fail('confirm the plan first — the agent writes it with theseus.js plan --file F, and the human confirms it in the viewer');
   }
   if (state.checkpoints.some(c => c.status !== 'pending')) {
     fail('checkpoints are already in progress — append new ones with: theseus.js add --file F');
   }
   state.checkpoints = normalizeCheckpoints(readJson(requireFlag(flags, 'file')), 0, 'plan', repoNames(run));
   save(p, run, state);
-  log(p, 'planned', { count: state.checkpoints.length });
-  console.log(`theseus: ${state.checkpoints.length} checkpoint(s) planned at size ${settingsOf(run).granularity} — the human reviews and approves them in the viewer`);
+  log(p, 'checkpoints-loaded', { count: state.checkpoints.length });
+  console.log(`theseus: ${state.checkpoints.length} checkpoint(s) loaded at size ${settingsOf(run).granularity} — the human reviews and approves them in the viewer`);
 }
+
+// Legacy alias: `theseus plan` still loads checkpoints, for callers that
+// have not migrated to `theseus checkpoints`. The new canonical name is `checkpoints`.
+const cmdLoadPlan = cmdCheckpoints;
 
 function cmdAdd(p, { flags }) {
   const { run, state } = loadRun(p);
@@ -1315,7 +1382,7 @@ function cmdBegin(p, { positionals }) {
   assertOpen(run);
   const cp = findCheckpoint(state, positionals[0]);
   if (cp.status !== 'pending') fail(`${cp.id} is already '${cp.status}'`);
-  if (!cp.approved) fail(`${cp.id} has not been approved by a human — they approve the plan in the viewer`);
+  if (!cp.approved) fail(`${cp.id} has not been approved by a human — they approve the checkpoints in the viewer`);
   const active = state.checkpoints.find(isActive);
   if (active) fail(`${active.id} is still '${active.status}' — one checkpoint at a time`);
   const earlier = state.checkpoints.slice(0, state.checkpoints.indexOf(cp)).find(c => c.status !== 'done');
@@ -1619,7 +1686,7 @@ async function cmdWait(p, { flags }) {
   if (!Number.isFinite(timeout) || timeout <= 0) fail('--timeout must be a positive number of seconds');
   const seen = readLog(p).length;
   const deadline = Date.now() + timeout * 1000;
-  const human = new Set(['plan-approved', 'approved', 'feedback', 'changes-requested', 'settings-changed', 'brief-approved', 'brief-changes-requested', 'run-kept-open']);
+  const human = new Set(['checkpoints-approved', 'plan-approved-req', 'approved', 'feedback', 'changes-requested', 'settings-changed', 'plan-changes-requested', 'brief-approved', 'brief-changes-requested', 'plan-approved', 'run-kept-open']);
   while (Date.now() < deadline) {
     // The human completed, abandoned or switched away from this run in the viewer.
     if (!fs.existsSync(p.runFile) || readJson(p.runFile).key !== key) {
@@ -1633,19 +1700,22 @@ async function cmdWait(p, { flags }) {
       for (const e of fresh) {
         if (e.event === 'settings-changed') continue; // announced by announceSettings below
         const what = {
-          'plan-approved': `plan approved (${(e.cps || []).join(', ')})`,
+          'checkpoints-approved': `checkpoints approved (${(e.cps || []).join(', ')})`,
+          'plan-approved-req': 'plan confirmed — now do the research and load the checkpoints',
+          'plan-approved': `checkpoints approved (${(e.cps || []).join(', ')})`,
           approved: `${e.cp} approved`,
           feedback: `feedback${e.cp ? ` on ${e.cp}` : ''}: ${e.text}`,
           'changes-requested': `changes requested on ${e.cp}: ${e.text}`,
-          'brief-approved': 'brief confirmed — now do the research and plan the checkpoints',
-          'brief-changes-requested': `changes requested on the brief: ${e.text}`,
+          'brief-approved': 'plan confirmed — now do the research and load the checkpoints',
+          'plan-changes-requested': `changes requested on the plan: ${e.text}`,
+          'brief-changes-requested': `changes requested on the plan: ${e.text}`,
           'run-kept-open': 'the human kept the run open',
         }[e.event];
         console.log(`theseus: ${what}`);
       }
       announceSettings(p);
       if (fresh.some(e => e.event === 'approved')) console.log('theseus: commit the approved checkpoint, then continue.');
-      if (fresh.some(e => ['feedback', 'changes-requested', 'brief-changes-requested'].includes(e.event))) console.log('theseus: read it with: theseus.js inbox');
+      if (fresh.some(e => ['feedback', 'changes-requested', 'plan-changes-requested', 'brief-changes-requested'].includes(e.event))) console.log('theseus: read it with: theseus.js inbox');
       return;
     }
     await new Promise(resolve => setTimeout(resolve, 500));
@@ -1855,7 +1925,7 @@ function announceServer(info, reused) {
 
 async function cmdServe(p, { flags }) {
   const { run } = loadRun(p);
-  if (run.briefRequired && !run.brief) fail('finish and submit the requirements brief before starting the viewer: theseus.js brief --file F');
+  if (run.planRequired && !run.plan) fail('finish and submit the requirements plan before starting the viewer: theseus.js plan --file F');
   const { port, host, headless, allowOrigins } = serveOptions(flags);
 
   if (flags.foreground) {
@@ -2078,6 +2148,7 @@ function cmdAgents(cwd, { flags }) {
 
 const COMMANDS = {
   plan: cmdPlan,
+  checkpoints: cmdCheckpoints,
   add: cmdAdd,
   begin: cmdBegin,
   record: cmdRecord,
@@ -2166,11 +2237,13 @@ module.exports = {
   pathsFor,
   loadRun,
   snapshot,
-  approvePlan,
+  approveCheckpoints,
+  approveReqPlan,
   advance,
   addFeedback,
   doneMessage,
   approveBrief,
+  approvePlan,
   listRuns,
   findRun,
   withRunDir,

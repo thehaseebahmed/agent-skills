@@ -102,7 +102,7 @@ function workspace({ begin = true } = {}) {
   makeRepo(path.join(dir, 'web'), 'web.done');
   ok(dir, 'init', '--key', 'WS-1', '--reference', 'spec.md', '--repos', 'api,web', '--test-cmd', 'node check.js');
   confirmBrief(dir);
-  ok(dir, 'plan', '--file', writeJson(path.dirname(dir), `plan-${path.basename(dir)}.json`, PLAN));
+  ok(dir, 'checkpoints', '--file', writeJson(path.dirname(dir), `plan-${path.basename(dir)}.json`, PLAN));
   viewerApprovePlan(dir);
   if (begin) ok(dir, 'begin', 'CP1');
   return dir;
@@ -259,7 +259,7 @@ test('a dirty submodule no longer crashes, and changing it makes gates stale', (
   git(app, 'commit', '-q', '-m', 'add submodule');
   ok(app, 'init', '--key', 'S', '--reference', 'r', '--test-cmd', 'node check.js');
   confirmBrief(app);
-  ok(app, 'plan', '--file', writeJson(root, 'plan.json', [{ title: 't', done: 'd', ui: false, tests: ['x'] }]));
+  ok(app, 'checkpoints', '--file', writeJson(root, 'plan.json', [{ title: 't', done: 'd', ui: false, tests: ['x'] }]));
   viewerApprovePlan(app);
   ok(app, 'begin', 'CP1');
   fs.writeFileSync(path.join(app, 'lib', 'inside.txt'), 'dirty submodule\n');

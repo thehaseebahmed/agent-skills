@@ -1,17 +1,17 @@
 # Planning checkpoints
 
 The brief for the `theseus-planner` subagent: it plans the checkpoints and their tests. The output is a JSON
-array that `theseus plan --file` loads.
+array that `theseus checkpoints --file` loads.
 
-You are also given the viewer-approved **requirements brief**. The human agreed to it,
+You are also given the viewer-approved **requirements plan**. The human agreed to it,
 so every item in its `checkpoint_areas` and `acceptance_criteria` must be covered by
 at least one checkpoint. If one cannot be, say which and why rather than dropping it
 silently. Respect its `scope_boundaries`, `assumptions`, `risks`, and
-`resolved_decisions`; unresolved questions are never permitted in a submitted brief.
+`resolved_decisions`; unresolved questions are never permitted in a submitted plan.
 
 You are dispatched only after viewer approval. Do not reopen requirements discovery,
 create implementation code, or substitute your own approval for a missing decision;
-return a targeted question to the orchestrator if the approved brief and reference
+return a targeted question to the orchestrator if the approved plan and reference
 materially conflict.
 
 ## What a checkpoint is
@@ -20,7 +20,7 @@ One small, ordered unit of work, finished and verified before the next begins.
 
 | Property | Rule |
 |---|---|
-| Size | Set per run, and `theseus plan` prints it. **`s-m`** (default): a small vertical slice, about 2–5 files, reviewable in under ten minutes. **`xs-s`**: one component, one rule, one endpoint, reviewable in a few minutes. Larger than the run's size means split it; much smaller means merge it with its neighbour, since every checkpoint costs a full round of subagents |
+| Size | Set per run, and `theseus checkpoints` prints it. **`s-m`** (default): a small vertical slice, about 2–5 files, reviewable in under ten minutes. **`xs-s`**: one component, one rule, one endpoint, reviewable in a few minutes. Larger than the run's size means split it; much smaller means merge it with its neighbour, since every checkpoint costs a full round of subagents |
 | `done` | Observable: a test outcome or a visible state. Never "implemented" or "refactored" |
 | `ui` | `true` if anything a user sees or touches could change. When in doubt, `true`: a wrong `false` lets a visual regression skip gate 2 |
 | `tests` | The cases that prove `done`: happy path first, then each unhappy path. Plain language; the builder turns them into code |

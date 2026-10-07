@@ -181,7 +181,7 @@
   </header>
 
   <div id="banners"></div>
-  <div id="brief"></div>
+  <div id="plan"></div>
   <div id="summary"></div>
 
   <div class="grid">
@@ -371,7 +371,7 @@
     }
     const unapproved = data.checkpoints.filter(c => !c.approved);
     if (unapproved.length) {
-      out.push(`<div class="banner"><p><b>${unapproved.length} checkpoint${unapproved.length > 1 ? 's' : ''} need your approval</b> before any code is written (${unapproved.map(c => esc(c.id)).join(', ')}). Read each one's done-criteria and tests below. Approving starts the run with the settings in the header chips — set them now if you want different ones.</p><button class="btn primary" id="approve-plan">Approve plan</button></div>`);
+      out.push(`<div class="banner"><p><b>${unapproved.length} checkpoint${unapproved.length > 1 ? 's' : ''} need your approval</b> before any code is written (${unapproved.map(c => esc(c.id)).join(', ')}). Read each one's done-criteria and tests below. Approving starts the run with the settings in the header chips — set them now if you want different ones.</p><button class="btn primary" id="approve-checkpoints">Approve checkpoints</button></div>`);
     }
     const waiting = data.checkpoints.find(c => c.status === 'awaiting-approval');
     if (waiting) {
@@ -389,41 +389,62 @@
     return items && items.length ? `<div><h4>${esc(title)}</h4><ul>${items.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>` : '';
   }
 
-  function renderBrief() {
-    const b = data.run.brief;
+  function altBlock(alts) {
+    if (!alts || !alts.length) return '';
+    return `<div><h4>Rejected alternatives</h4><ul>${alts.map(a => `<li><b>${esc(a.alternative)}</b> — ${esc(a.reason)}</li>`).join('')}</ul></div>`;
+  }
+
+  function verifyBlock(title, checks) {
+    if (!checks || !checks.length) return '';
+    return `<div><h4>${esc(title)}</h4><ul>${checks.map(c => `<li><b>Prerequisites:</b> ${esc(c.prerequisites)}<br><b>Action:</b> ${esc(c.action)}<br><b>Expected:</b> ${esc(c.expected)}</li>`).join('')}</ul></div>`;
+  }
+
+  function renderPlan() {
+    // Read from run.plan (canonical) with run.brief (compat) fallback.
+    const b = data.run.plan || data.run.brief;
+    const required = data.run.planRequired !== undefined ? data.run.planRequired : data.run.briefRequired;
     if (!b) {
-      $('brief').innerHTML = data.run.briefRequired && !data.checkpoints.length
-        ? '<section class="panel card"><div class="body"><p class="empty">The agent is conducting the requirements conversation in chat. The viewer opens when its completed brief is ready for your approval.</p></div></section>'
+      $('plan').innerHTML = required && !data.checkpoints.length
+        ? '<section class="panel card"><div class="body"><p class="empty">The agent is conducting the requirements conversation in chat. The viewer opens when its completed plan is ready for your approval.</p></div></section>'
         : '';
       return;
     }
     const pill = { pending: '<span class="pill s-waiting">waiting for you</span>', draft: '<span class="pill s-stale">changes requested</span>', confirmed: '<span class="pill s-pass">confirmed</span>' }[b.status] || '';
     const body = `
+      <h4>1. Overview</h4>
       <p><b>Task:</b> ${esc(b.task)}</p>
       <p><b>Goal:</b> ${esc(b.goal)}</p>
       <p><b>Change type:</b> ${esc(b.change_type)}</p>
       ${b.current_behavior ? `<p><b>Current behavior:</b> ${esc(b.current_behavior)}</p>` : ''}
       <p><b>Expected behavior:</b> ${esc(b.expected_behavior)}</p>
-      <p><b>User-proposed approach:</b> ${esc(b.user_proposed_approach)}</p>
+      ${listBlock('Acceptance criteria', b.acceptance_criteria)}
+      ${listBlock('Scope boundaries', b.scope_boundaries)}
+      <h4>2. User-proposed implementation</h4>
+      <p>${esc(b.user_proposed_approach)}</p>
+      <h4>3. Recommended implementation</h4>
       <p><b>Reviewed approach:</b> ${esc(b.reviewed_approach)}</p>
       <p><b>Recommended approach:</b> ${esc(b.recommended_approach)}</p>
       <p><b>Rationale:</b> ${esc(b.approach_rationale)}</p>
+      ${altBlock(b.rejected_alternatives)}
+      ${listBlock('Checkpoint areas', b.checkpoint_areas)}
       <div class="cols">
-        ${listBlock('Acceptance criteria', b.acceptance_criteria)}
-        ${listBlock('Checkpoint areas', b.checkpoint_areas)}
-        ${listBlock('Scope boundaries', b.scope_boundaries)}
         ${listBlock('Assumptions', b.assumptions)}
         ${listBlock('Risks', b.risks)}
         ${listBlock('Resolved decisions', b.resolved_decisions)}
       </div>
+      <h4>4. Verification</h4>
+      <div class="cols">
+        ${verifyBlock('Automated checks', b.verification && b.verification.automated)}
+        ${verifyBlock('Manual checks', b.verification && b.verification.manual)}
+      </div>
       ${b.status === 'pending' && !isReadOnly() ? `
-        <p class="muted" style="margin-top:12px">Requirements are resolved. Approve this brief before planning begins.</p>
-        <textarea data-keep="brief-changes" placeholder="What should be corrected? (needed for Request changes)"></textarea>
-        <div class="actions"><button class="btn primary" id="approve-brief">Approve requirements brief</button><button class="btn" id="brief-changes">Request changes</button></div>` : ''}`;
+        <p class="muted" style="margin-top:12px">Requirements are resolved. Approve this plan before checkpoint planning begins.</p>
+        <textarea data-keep="plan-changes" placeholder="What should be corrected? (needed for Request changes)"></textarea>
+        <div class="actions"><button class="btn primary" id="approve-plan">Approve plan</button><button class="btn" id="plan-changes">Request changes</button></div>` : ''}`;
     // Once confirmed and planned, keep it out of the way.
-    $('brief').innerHTML = b.status === 'confirmed' && data.checkpoints.length
-      ? `<details class="panel card"><summary class="body" style="cursor:pointer"><b>Brief</b> ${pill}</summary><div class="body">${body}</div></details>`
-      : `<section class="panel card"><div class="body"><h3>Requirements brief ${pill}</h3>${body}</div></section>`;
+    $('plan').innerHTML = b.status === 'confirmed' && data.checkpoints.length
+      ? `<details class="panel card"><summary class="body" style="cursor:pointer"><b>Plan</b> ${pill}</summary><div class="body">${body}</div></details>`
+      : `<section class="panel card"><div class="body"><h3>Requirements plan ${pill}</h3>${body}</div></section>`;
   }
 
   function renderSummary() {
@@ -556,16 +577,21 @@
         case 'begin': return `${e.cp} started`;
         case 'approved': return `${e.cp} approved${e.deferred ? ' (deferred to PR)' : e.by ? ` by ${e.by}` : ''}`;
         case 'awaiting-approval': return `${e.cp} waiting for your approval`;
-        case 'plan-approved': return `plan approved (${(e.cps || []).join(', ')})`;
+        case 'plan-approved': return `checkpoints approved (${(e.cps || []).join(', ')})`;
+        case 'checkpoints-approved': return `checkpoints approved (${(e.cps || []).join(', ')})`;
         case 'changes-requested': return `changes requested on ${e.cp}: ${e.text}`;
         case 'feedback': return `feedback${e.cp ? ` on ${e.cp}` : ''}: ${e.text}`;
         case 'learned': return `learned: ${e.text}`;
-        case 'planned': return `${e.count} checkpoints planned`;
+        case 'planned': return `${e.count} checkpoints loaded`;
+        case 'checkpoints-loaded': return `${e.count} checkpoints loaded`;
         case 'added': return `added ${(e.cps || []).join(', ')}`;
         case 'init': return `run ${e.key} started`;
-        case 'brief-submitted': return `requirements brief submitted (${e.areas} checkpoint area${e.areas === 1 ? '' : 's'})`;
-        case 'brief-approved': return `brief confirmed${e.by ? ` by ${e.by}` : ''}`;
-        case 'brief-changes-requested': return `changes requested on the brief: ${e.text}`;
+        case 'plan-submitted': return `requirements plan submitted (${e.areas} checkpoint area${e.areas === 1 ? '' : 's'})`;
+        case 'plan-approved-req': return `plan confirmed${e.by ? ` by ${e.by}` : ''}`;
+        case 'plan-changes-requested': return `changes requested on the plan: ${e.text}`;
+        case 'brief-submitted': return `requirements plan submitted (${e.areas} checkpoint area${e.areas === 1 ? '' : 's'})`;
+        case 'brief-approved': return `plan confirmed${e.by ? ` by ${e.by}` : ''}`;
+        case 'brief-changes-requested': return `changes requested on the plan: ${e.text}`;
         case 'completion-requested': return 'agent asked to complete the run';
         case 'abandon-requested': return `agent asked to abandon the run: ${e.reason}`;
         case 'run-kept-open': return 'run kept open';
@@ -591,7 +617,7 @@
       $('chips').innerHTML = runPicker(null);
       $('next').textContent = data.error;
       $('reference').textContent = '';
-      for (const id of ['banners', 'brief', 'summary', 'timeline']) $(id).innerHTML = '';
+      for (const id of ['banners', 'plan', 'summary', 'timeline']) $(id).innerHTML = '';
       $('detail').innerHTML = '<p class="empty">No active run. Pick one from the run menu to view it.</p>';
       return;
     }
@@ -604,7 +630,7 @@
     const caret = focused ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
     renderHeader();
     renderBanners();
-    renderBrief();
+    renderPlan();
     renderSummary();
     renderTimeline();
     renderDetail();
@@ -646,18 +672,18 @@
       if (await act(el, () => post('/api/switch', { key: el.dataset.switch }))) viewing = null;
     } else if (el.dataset.close) {
       await act(el, () => post('/api/close', { decision: el.dataset.close }));
-    } else if (el.id === 'approve-brief') {
-      await act(el, () => post('/api/approve-brief'));
-    } else if (el.id === 'brief-changes') {
-      const text = (drafts['brief-changes'] || '').trim();
+    } else if (el.id === 'approve-plan' || el.id === 'approve-brief') {
+      await act(el, () => post(el.id === 'approve-brief' ? '/api/approve-brief' : '/api/approve-implementation-plan'));
+    } else if (el.id === 'plan-changes' || el.id === 'brief-changes') {
+      const text = (drafts[el.id] || '').trim();
       if (!text) return toast('Say what it got wrong or missed first.', true);
-      if (await act(el, () => post('/api/feedback', { brief: true, text }))) drafts['brief-changes'] = '';
+      if (await act(el, () => post('/api/feedback', { brief: el.id === 'brief-changes', plan: el.id === 'plan-changes', text }))) drafts[el.id] = '';
     } else if (el.dataset.select) {
       selected = el.dataset.select;
       history.replaceState(null, '', `${location.search}#${encodeURIComponent(selected)}`);
       render();
-    } else if (el.id === 'approve-plan') {
-      await act(el, () => post('/api/approve-plan'));
+    } else if (el.id === 'approve-checkpoints') {
+      await act(el, () => post('/api/approve-checkpoints'));
     } else if (el.dataset.approve) {
       await act(el, () => post(`/api/approve/${encodeURIComponent(el.dataset.approve)}`));
     } else if (el.dataset.changes) {

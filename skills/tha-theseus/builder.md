@@ -41,7 +41,7 @@ If a finding is wrong, don't argue it away in code. Report it.
 ## Never
 
 - record a review or visual verdict
-- run `advance`, `approve-plan` or `config`
+- run `advance`, `approve-checkpoints` or `config`
 - commit
 
 Those belong to the orchestrator and the human.

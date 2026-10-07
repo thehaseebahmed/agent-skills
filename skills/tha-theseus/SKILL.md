@@ -154,13 +154,13 @@ This is an enforced phase, not a recon note. Ask and resolve, in order:
    critique that proposal, recommend an approach with rationale, and ask any final
    targeted questions.
 
-Do not submit a brief while a material question remains. Resolve it with the human,
+Do not submit a plan while a material question remains. Resolve it with the human,
 or record an explicit human-approved assumption. During discovery you may inspect
 code, standards, and architecture, but must not create checkpoints, dispatch the
 planner, or implement code.
 
 Initial configuration is agent-side; do not start the viewer yet. The viewer starts
-only after the completed brief has been submitted.
+only after the completed plan has been submitted.
 
 Settle these with the human before anything else:
 
@@ -194,7 +194,7 @@ shape you already know; they are optional.
 to read. `--granularity s-m`, the default, gives fewer, larger checkpoints, each
 a small vertical slice; `xs-s` gives Helix-sized tiny ones, which cost more
 subagent start-ups. The human may also set it in the viewer when confirming the
-brief, before planning starts.
+plan, before planning starts.
 
 4. **Agents:** run `theseus agents` once per repo, unless the files exist already. It
    writes lean `theseus-planner`, `theseus-builder` and `theseus-reviewer` agents.
@@ -232,7 +232,7 @@ brief, before planning starts.
 
 | Setting | Values | Default | Viewer chip | CLI flag | Who may change it mid-run |
 |---|---|---|---|---|---|
-| approve cadence (`autonomy`) | `step`, `batch:N`, `unattended` | `step` | "approve" | `--autonomy` | viewer any direction; CLI stricter only; `unattended` viewer-only, after brief approval |
+| approve cadence (`autonomy`) | `step`, `batch:N`, `unattended` | `step` | "approve" | `--autonomy` | viewer any direction; CLI stricter only; `unattended` viewer-only, after plan approval |
 | checkpoint size (`granularity`) | `s-m`, `xs-s` | `s-m` | "checkpoint size" | `--granularity` | viewer any direction; CLI any direction (it shapes future plans, not gates) |
 | visual review (`visual`) | `on`, `off` | `on` | "visual review" | `--visual` | viewer any direction; CLI stricter only |
 | code reviewers (`reviewers`) | `2`, `1`, `0` | `2` | "code reviewers" | `--reviewers` | viewer any direction; CLI stricter only |
@@ -253,9 +253,9 @@ theseus init --key HR-7 --reference "legacy/LeaveForm.tsx + docs/mock.html" \
   --test-cmd "npm test" --arch "ARCHITECTURE.md,docs/ui.md"
 ```
 
-### Step 1b: Submit the resolved requirements brief
+### Step 1b: Submit the resolved requirements plan
 
-After the conversation and focused review are complete, submit this concise document:
+After the conversation and focused review are complete, submit this concise document, organized in four parts:
 
 ```json
 {
@@ -265,26 +265,47 @@ After the conversation and focused review are complete, submit this concise docu
   "current_behavior": "required for bugs; optional for features",
   "expected_behavior": "the intended behavior",
   "acceptance_criteria": ["observable outcomes"],
+  "scope_boundaries": ["what is explicitly out of scope"],
   "user_proposed_approach": "what the user suggested",
   "reviewed_approach": "what code and standards review found about that proposal",
   "recommended_approach": "the approach the agent recommends",
   "approach_rationale": "why this approach fits the codebase and requirements",
+  "rejected_alternatives": [
+    { "alternative": "the approach considered and rejected", "reason": "why it was rejected" }
+  ],
   "checkpoint_areas": ["areas the planner must cover"],
-  "scope_boundaries": [], "assumptions": [], "risks": [],
-  "resolved_decisions": [], "unresolved_questions": []
+  "assumptions": [], "risks": [], "resolved_decisions": [], "unresolved_questions": [],
+  "verification": {
+    "automated": [
+      { "prerequisites": "the state the system must be in (or 'none')", "action": "the concrete command to run", "expected": "what a passing check looks like" }
+    ],
+    "manual": [
+      { "prerequisites": "the state the system must be in (or 'none')", "action": "the concrete step to perform", "expected": "what a passing check looks like" }
+    ]
+  }
 }
 ```
 
+The four parts, in order:
+1. **Overview** — `task`, `goal`, `current_behavior` (bugs), `expected_behavior`, `acceptance_criteria`, `scope_boundaries`.
+2. **User-proposed implementation** — `user_proposed_approach`, faithfully describing what the user had in mind. State "none offered" if the user supplied no proposal.
+3. **Recommended implementation** — `reviewed_approach`, `recommended_approach`, `approach_rationale`, `rejected_alternatives` (each with a brief reason), `checkpoint_areas`, `assumptions`, `risks`, `resolved_decisions`.
+4. **Verification** — `verification.automated` and `verification.manual`, each listing actionable checks with prerequisites, the command or step, and the expected result. Use a single entry with `action: "not applicable"` and a reason in `expected` when a category genuinely does not apply.
+
+`rejected_alternatives` must record genuinely considered options, not filler. An empty list is not accepted silently — if no alternatives were evaluated, submit a single entry `{ "alternative": "none considered", "reason": "why no alternatives were evaluated" }`.
+
 ```bash
-theseus brief --file brief.json
+theseus plan --file plan.json
 theseus serve
 theseus wait     # the human confirms it, or requests changes, in the viewer
 ```
 
 - **Changes requested:** read them (`theseus inbox`), revise, and submit again.
-- **`plan` is refused** until a valid requirements brief is confirmed in the viewer.
-- The script rejects missing required fields, a bug without `current_behavior`, or
-  any non-empty `unresolved_questions` list.
+- **`checkpoints` is refused** until a valid requirements plan is confirmed in the viewer.
+- The script rejects missing required fields, a bug without `current_behavior`, any
+  non-empty `unresolved_questions` list, missing or malformed `rejected_alternatives`,
+  or missing/incomplete `verification` (automated and manual).
+- `theseus brief --file` remains as a legacy alias for `theseus plan --file`.
 
 Only after confirmation do the expensive work: pre-flight, deep reading and the
 planner subagent.
@@ -293,13 +314,13 @@ planner subagent.
 the reference app, if there is one) starts. Gates mean nothing on a project that is
 already broken. Fix that first, or tell the human.
 
-### Step 2: Plan the checkpoints, with their tests
+### Step 2: Load the checkpoints, with their tests
 
 Dispatch the **checkpoint planner** (`theseus-planner`, if you generated it) with
-[checkpoints.md](checkpoints.md), the reference and the **confirmed brief**. Every
+[checkpoints.md](checkpoints.md), the reference and the **confirmed plan**. Every
 `areas` item must be covered by the checkpoints, or the planner must say why not. It returns an ordered list:
 
-- checkpoints at the run's size (`plan` prints it): XS–S or S–M
+- checkpoints at the run's size (`checkpoints` prints it): XS–S or S–M
 - smallest and most foundational first
 - each one with an observable `done` and a `ui` flag
 
@@ -307,24 +328,24 @@ The same planner attaches the test cases to every checkpoint, so the human appro
 what "done" means, not just titles.
 
 ```bash
-theseus plan --file /tmp/checkpoints.json
+theseus checkpoints --file /tmp/checkpoints.json
 ```
 
 The checkpoints appear in the viewer at once, each with its done-criteria and
 planned tests.
 
 **Stop here.** Nothing is built until the human approves the list. This is also
-the moment they pick the run settings: with the plan in front of them — its
+the moment they pick the run settings: with the checkpoints in front of them — its
 checkpoint count, which are UI, how big each is — they can set the header chips
 (approve cadence, visual review, code reviewers) to fit it, and the run starts
-with exactly whatever the chips say at the click. Tell them the plan is ready
+with exactly whatever the chips say at the click. Tell them the checkpoints are ready
 and the chips are theirs to set, then wait:
 
 ```bash
 theseus wait     # returns when they approve or send feedback; re-run on timeout
 ```
 
-- **Feedback instead of approval:** read it with `theseus inbox`, revise, `plan`
+- **Feedback instead of approval:** read it with `theseus inbox`, revise, `checkpoints`
   again, and wait again.
 - The checkpoint list is always approved in the viewer, even when the human later
   enables unattended checkpoint autonomy.
@@ -442,7 +463,7 @@ Other harnesses rely on the script's refusals alone.
 
 | Rationalization | Reality |
 |---|---|
-| "I'll research properly first so the brief is accurate" | Requirements discovery includes the targeted code and standards review needed to critique the proposed approach. Do not plan or implement until the resolved brief is approved |
+| "I'll research properly first so the plan is accurate" | Requirements discovery includes the targeted code and standards review needed to critique the proposed approach. Do not plan or implement until the resolved plan is approved |
 | "The reviewer's finding is just a nit" | Every finding is fixed or the gate stays shut. If a rule is wrong, change the architecture doc with the human, then re-review. Don't argue it away mid-checkpoint |
 | "I fixed it after the review; it's obviously fine" | The fix is new code nobody has reviewed. The fingerprint check exists because this is the commonest way bad code ships |
 | "The tests pass, so the UI is fine" | Gate 1 proves behaviour. Spacing, states and interaction are gate 2's job, and they drift silently |
