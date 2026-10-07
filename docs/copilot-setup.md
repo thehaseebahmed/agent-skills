@@ -31,3 +31,56 @@ for Copilot.
 
 When Copilot selects a skill, the `SKILL.md` is injected into the agent's
 context — the same portable file that works in Claude Code, Cursor, and the rest.
+
+## Skills that run scripts
+
+`tha-theseus` enforces its gates with `scripts/theseus.js`, which ships inside
+the skill directory, so copying the directory brings it along. It needs Node 20+
+and git on the machine or runner where Copilot works; it has no npm
+dependencies. Copilot has no equivalent here of the Claude Code `Stop` hook this
+pack registers, so under Copilot the gates are held by the script's refusals alone.
+
+Its state goes in `.theseus/` in the directory Copilot is working in.
+
+### The live viewer
+
+`theseus.js serve` starts a local page on `127.0.0.1` and prints a link to it.
+
+- **Locally (VS Code or Copilot CLI):** the link opens in your browser. That is where
+  you follow the run and approve checkpoints.
+- **VS Code Remote and Codespaces:** port forwarding may expose the link. This pack
+  has not verified that.
+- **The cloud coding agent on GitHub.com:** use Theseus only when the human can
+  access its viewer. Theseus has no chat or CLI approval fallback; all brief, plan,
+  checkpoint, and close approvals are made in the viewer.
+
+### Custom agents with their own model
+
+For work across several repos, start one run from the folder that holds them:
+`theseus.js init --repos api,web …`. Copilot reads `.github/agents/` per repository,
+so run `theseus.js agents` inside each repo you open with Copilot. *Unverified:* how
+Copilot picks up agents when a workspace opens a parent folder of several repos.
+
+`theseus.js agents` writes `.github/agents/theseus-planner.agent.md`,
+`theseus-builder.agent.md` and `theseus-reviewer.agent.md`. Each has a narrow `tools`
+list, and planning and review can run on a different model from the main session:
+
+```sh
+node <skill-dir>/scripts/theseus.js agents --target copilot \
+  --planner-model-copilot "<model name as Copilot shows it>"
+```
+
+*Unverified: docs.github.com was unreachable when this was written (October 2026).*
+The format follows repository custom agents in `.github/agents/*.agent.md`, with
+`name`, `description`, `tools` and `model` frontmatter, as shown in the Copilot CLI
+issue tracker. Two open issues there affect this:
+
+- [github/copilot-cli#2133](https://github.com/github/copilot-cli/issues/2133): the
+  CLI rejects a list in `model`. The generator always writes a single string.
+- [github/copilot-cli#2758](https://github.com/github/copilot-cli/issues/2758): the
+  CLI silently downgrades a subagent to the session's model when the subagent's
+  model costs more. Start the session on at least the model you pinned.
+
+The Claude Code files also set `effort`, `maxTurns` and `omitClaudeMd` to cut each
+subagent's start-up cost. The Copilot files leave those out: Copilot's support for
+them couldn't be verified.
