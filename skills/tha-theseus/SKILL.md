@@ -44,6 +44,14 @@ verdict, screenshot and learning as it happens, and it is where the human approv
 The viewer is one client of a local API. When the human follows the run in another
 product's UI, start it with `theseus serve --headless` and see [api.md](api.md).
 
+The server listens on 127.0.0.1, so only this machine can open the link. Inside a
+container (a Docker sandbox, say) that is too narrow: the human's browser is outside
+it. If `THESEUS_HOST` is set, `serve` uses it; otherwise pass `--host 0.0.0.0` only
+when the human tells you the run is in a container whose port they will publish, and
+pin `--port` so the published port stays right. A wide bind lets anyone who can
+reach the port load the page; the token in the link is all that guards the run, so
+give that link to the human and nobody else.
+
 The server stops itself after six hours with no request and no change to the run, so
 a forgotten one never lingers. Only the process ends; `.theseus/` is untouched. If the
 link stops working, or `theseus status` shows no `viewer:` line, run `theseus serve`
