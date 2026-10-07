@@ -67,7 +67,7 @@ function planned() {
   const file = path.join(dir, '..', `cps-${path.basename(dir)}.json`);
   fs.writeFileSync(file, JSON.stringify(CHECKPOINTS));
   confirmBrief(dir);
-  ok(dir, 'plan', '--file', file);
+  ok(dir, 'checkpoints', '--file', file);
   return dir;
 }
 
@@ -136,7 +136,7 @@ test('approving the plan in the viewer records it as the viewer', () =>
     assert.strictEqual((await res.json()).message, 'Approved CP1, CP2 — the run proceeds with every checkpoint · visual on · 2 code reviewers.');
     const snap = JSON.parse(ok(dir, 'status', '--json', '--full').out);
     assert.deepStrictEqual(snap.checkpoints[0].plannedBy, { by: 'human (viewer)', source: 'viewer' });
-    const entry = snap.log.find(e => e.event === 'plan-approved');
+    const entry = snap.log.find(e => e.event === 'checkpoints-approved');
     assert.deepStrictEqual(entry.settings, { autonomy: 'step', granularity: 's-m', visual: 'on', reviewers: '2' });
     const again = await api('/api/approve-plan', { method: 'POST' });
     assert.strictEqual(again.status, 409);

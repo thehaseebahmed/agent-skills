@@ -24,7 +24,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const net = require('node:net');
 
-const { GateError, snapshot, approvePlan, advance, addFeedback, setSettings, doneMessage, approveBrief, listRuns, findRun, withRunDir, switchRun, closeRun, IMAGE_TYPES } = require('./theseus');
+const { GateError, snapshot, approveCheckpoints, approveReqPlan, advance, addFeedback, setSettings, doneMessage, approveBrief, approvePlan, listRuns, findRun, withRunDir, switchRun, closeRun, IMAGE_TYPES } = require('./theseus');
 
 /** Bumped on any breaking change to the routes or payloads in ../api.md. */
 const API_VERSION = 1;
@@ -243,8 +243,15 @@ function startServer(p, { port = 0, host = DEFAULT_HOST, token = crypto.randomBy
       }
       if (req.method === 'GET' && route.startsWith('/evidence/')) return serveEvidence(p, res, route.slice('/evidence/'.length));
 
+      // Canonical route: approve the planned checkpoints.
+      if (req.method === 'POST' && route === '/api/approve-checkpoints') {
+        const plan = approveCheckpoints(p, { by: 'human (viewer)', source: 'viewer' });
+        broadcast(true);
+        return send(res, 200, { ok: true, message: `Approved ${plan.cps.join(', ')} — the run proceeds with ${plan.settings}.` });
+      }
+      // Legacy alias: /api/approve-plan still approves checkpoints (its original meaning).
       if (req.method === 'POST' && route === '/api/approve-plan') {
-        const plan = approvePlan(p, { by: 'human (viewer)', source: 'viewer' });
+        const plan = approveCheckpoints(p, { by: 'human (viewer)', source: 'viewer' });
         broadcast(true);
         return send(res, 200, { ok: true, message: `Approved ${plan.cps.join(', ')} — the run proceeds with ${plan.settings}.` });
       }
@@ -262,16 +269,23 @@ function startServer(p, { port = 0, host = DEFAULT_HOST, token = crypto.randomBy
       }
       if (req.method === 'POST' && route === '/api/feedback') {
         const body = await readBody(req);
-        const { reopened, brief } = addFeedback(p, { cp: body.cp || null, text: body.text, brief: body.brief === true });
+        const { reopened, brief } = addFeedback(p, { cp: body.cp || null, text: body.text, brief: body.brief === true || body.plan === true });
         broadcast(true);
-        const message = brief ? 'Changes requested on the brief — the agent revises it before any planning.'
+        const message = brief ? 'Changes requested on the plan — the agent revises it before any checkpoints are loaded.'
           : reopened ? `Changes requested — ${body.cp} is back to building.` : 'Feedback sent to the agent.';
         return send(res, 200, { ok: true, message });
       }
-      if (req.method === 'POST' && route === '/api/approve-brief') {
-        approveBrief(p, { by: 'human (viewer)', source: 'viewer' });
+      // Canonical route: approve the requirements plan.
+      if (req.method === 'POST' && route === '/api/approve-implementation-plan') {
+        approveReqPlan(p, { by: 'human (viewer)', source: 'viewer' });
         broadcast(true);
-        return send(res, 200, { ok: true, message: 'Requirements brief approved — the agent can now plan the checkpoints.' });
+        return send(res, 200, { ok: true, message: 'Requirements plan approved — the agent can now load the checkpoints.' });
+      }
+      // Legacy alias: /api/approve-brief still approves the requirements plan.
+      if (req.method === 'POST' && route === '/api/approve-brief') {
+        approveReqPlan(p, { by: 'human (viewer)', source: 'viewer' });
+        broadcast(true);
+        return send(res, 200, { ok: true, message: 'Requirements plan approved — the agent can now load the checkpoints.' });
       }
       if (req.method === 'POST' && route === '/api/switch') {
         const body = await readBody(req);

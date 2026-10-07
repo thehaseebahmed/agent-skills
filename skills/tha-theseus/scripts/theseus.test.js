@@ -108,7 +108,7 @@ function started(autonomy = 'step') {
   const dir = makeRepo();
   ok(dir, 'init', '--key', 'HR-7', '--reference', 'docs/mock.html', '--test-cmd', 'node check.js', '--autonomy', autonomy);
   confirmBrief(dir);
-  ok(dir, 'plan', '--file', writeJsonFile(os.tmpdir(), `cps-${process.pid}.json`, CHECKPOINTS));
+  ok(dir, 'checkpoints', '--file', writeJsonFile(os.tmpdir(), `cps-${process.pid}.json`, CHECKPOINTS));
   viewerApprovePlan(dir);
   ok(dir, 'begin', 'CP1');
   return dir;
@@ -136,7 +136,7 @@ test('begin refuses a checkpoint the human has not approved', () => {
   const dir = makeRepo();
   ok(dir, 'init', '--key', 'HR-7', '--reference', 'r', '--test-cmd', 'node check.js');
   confirmBrief(dir);
-  ok(dir, 'plan', '--file', writeJsonFile(os.tmpdir(), `cps-${process.pid}.json`, CHECKPOINTS));
+  ok(dir, 'checkpoints', '--file', writeJsonFile(os.tmpdir(), `cps-${process.pid}.json`, CHECKPOINTS));
   refused(dir, /CP1 has not been approved by a human/, 'begin', 'CP1');
 });
 
@@ -144,7 +144,7 @@ test('checkpoints run in order', () => {
   const dir = makeRepo();
   ok(dir, 'init', '--key', 'HR-7', '--reference', 'r', '--test-cmd', 'node check.js');
   confirmBrief(dir);
-  ok(dir, 'plan', '--file', writeJsonFile(os.tmpdir(), `cps-${process.pid}.json`, CHECKPOINTS));
+  ok(dir, 'checkpoints', '--file', writeJsonFile(os.tmpdir(), `cps-${process.pid}.json`, CHECKPOINTS));
   viewerApprovePlan(dir);
   refused(dir, /CP1 comes first and is not done/, 'begin', 'CP2');
 });
@@ -154,7 +154,7 @@ test('plan refuses a checkpoint without planned tests', () => {
   ok(dir, 'init', '--key', 'HR-7', '--reference', 'r', '--test-cmd', 'node check.js');
   const bad = writeJsonFile(os.tmpdir(), `bad-${process.pid}.json`, [{ title: 'x', done: 'y', ui: false, tests: [] }]);
   confirmBrief(dir);
-  refused(dir, /has no tests — plan the test cases before the human approves/, 'plan', '--file', bad);
+  refused(dir, /has no tests — plan the test cases before the human approves/, 'checkpoints', '--file', bad);
 });
 
 test('tests cannot be recorded before a failing red run', () => {
@@ -388,7 +388,7 @@ test('the removed CLI approval commands only print usage', () => {
   const dir = makeRepo();
   ok(dir, 'init', '--key', 'HR-7', '--reference', 'r', '--test-cmd', 'node check.js');
   confirmBrief(dir);
-  ok(dir, 'plan', '--file', writeJsonFile(os.tmpdir(), `cps-${process.pid}.json`, CHECKPOINTS));
+  ok(dir, 'checkpoints', '--file', writeJsonFile(os.tmpdir(), `cps-${process.pid}.json`, CHECKPOINTS));
   for (const removed of ['approve-plan', 'approve-brief']) {
     const result = theseus(dir, removed, '--by', 'me');
     assert.strictEqual(result.code, 1, `${removed} is no longer a command`);
@@ -401,7 +401,7 @@ test('advance --approved-by is refused but still parks the checkpoint for the hu
   const dir = makeRepo();
   ok(dir, 'init', '--key', 'HR-7', '--reference', 'r', '--test-cmd', 'node check.js');
   confirmBrief(dir);
-  ok(dir, 'plan', '--file', writeJsonFile(os.tmpdir(), `cps-${process.pid}.json`, CHECKPOINTS));
+  ok(dir, 'checkpoints', '--file', writeJsonFile(os.tmpdir(), `cps-${process.pid}.json`, CHECKPOINTS));
   viewerApprovePlan(dir);
   ok(dir, 'begin', 'CP1');
   passGates(dir);
@@ -413,8 +413,8 @@ test('the core refuses an approval that does not come from the viewer', () => {
   const dir = started();
   passGates(dir);
   assert.throws(() => core.advance(core.resolvePaths(dir), 'CP1', { by: 'h', source: 'cli' }), /checkpoint approval may only be recorded by the viewer/);
-  assert.throws(() => core.approvePlan(core.resolvePaths(dir), { by: 'h', source: 'cli' }), /plan approval may only be recorded by the viewer/);
-  assert.throws(() => core.approveBrief(core.resolvePaths(dir), { by: 'h', source: 'cli' }), /brief approval may only be recorded by the viewer/);
+  assert.throws(() => core.approvePlan(core.resolvePaths(dir), { by: 'h', source: 'cli' }), /checkpoint approval may only be recorded by the viewer/);
+  assert.throws(() => core.approveBrief(core.resolvePaths(dir), { by: 'h', source: 'cli' }), /plan approval may only be recorded by the viewer/);
 });
 
 test('wait times out with a clear message when the human has not acted', () => {
@@ -567,7 +567,7 @@ test('init records the checkpoint size, defaulting to s-m', () => {
 test('the CLI may tighten settings but never loosen them', () => {
   const dir = viewerRun(['--autonomy', 'batch:3']);
   assert.match(ok(dir, 'config', '--autonomy', 'step').out, /settings changed — autonomy batch:3 → step/);
-  refused(dir, /unattended autonomy can only be enabled in the viewer after the requirements brief is confirmed/, 'config', '--autonomy', 'unattended');
+  refused(dir, /unattended autonomy can only be enabled in the viewer after the requirements plan is confirmed/, 'config', '--autonomy', 'unattended');
   refused(dir, /loosen settings in the viewer/, 'config', '--autonomy', 'batch:2');
   refused(dir, /give at least one of autonomy, granularity, visual or reviewers/, 'config');
   assert.match(ok(dir, 'config', '--granularity', 'xs-s').out, /granularity s-m → xs-s/);
@@ -596,7 +596,7 @@ test('a checkpoint waiting for approval advances once the human switches to unat
   const dir = makeRepo();
   ok(dir, 'init', '--key', 'HR-7', '--reference', 'r', '--test-cmd', 'node check.js');
   confirmBrief(dir);
-  ok(dir, 'plan', '--file', writeJsonFile(os.tmpdir(), `cps-${process.pid}.json`, CHECKPOINTS));
+  ok(dir, 'checkpoints', '--file', writeJsonFile(os.tmpdir(), `cps-${process.pid}.json`, CHECKPOINTS));
   viewerApprovePlan(dir);
   ok(dir, 'begin', 'CP1');
   passGates(dir);
@@ -702,11 +702,11 @@ test('approving the plan records the settings the run proceeds with', () => {
   const dir = makeRepo();
   ok(dir, 'init', '--key', 'HR-7', '--reference', 'docs/mock.html', '--test-cmd', 'node check.js', '--autonomy', 'batch:4');
   confirmBrief(dir);
-  ok(dir, 'plan', '--file', writeJsonFile(os.tmpdir(), `cps-${process.pid}.json`, CHECKPOINTS));
+  ok(dir, 'checkpoints', '--file', writeJsonFile(os.tmpdir(), `cps-${process.pid}.json`, CHECKPOINTS));
   core.setSettings(core.resolvePaths(dir), { reviewers: '1' }, { source: 'viewer' });
   core.approvePlan(core.resolvePaths(dir), { by: 'human (viewer)', source: 'viewer' });
   const full = JSON.parse(ok(dir, 'status', '--json', '--full').out);
-  const entry = full.log.find(e => e.event === 'plan-approved');
+  const entry = full.log.find(e => e.event === 'checkpoints-approved');
   assert.deepStrictEqual(entry.settings, { autonomy: 'batch:4', granularity: 's-m', visual: 'on', reviewers: '1' });
   assert.strictEqual(core.settingsSummary(JSON.parse(fs.readFileSync(path.join(dir, '.theseus', 'current', 'run.json'), 'utf8'))), 'every 4 checkpoints · visual on · 1 code reviewer');
 });

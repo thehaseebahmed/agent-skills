@@ -75,7 +75,7 @@ function started(extra = []) {
   const plan = path.join(path.dirname(dir), `plan-${path.basename(dir)}.json`);
   fs.writeFileSync(plan, JSON.stringify([{ title: 'Form', done: 'matches the mock', ui: true, tests: ['error state'] }]));
   confirmBrief(dir);
-  ok(dir, 'plan', '--file', plan);
+  ok(dir, 'checkpoints', '--file', plan);
   core.approvePlan(core.resolvePaths(dir), { by: 'human (viewer)', source: 'viewer' });
   ok(dir, 'begin', 'CP1');
   ok(dir, 'record', 'CP1', 'red');

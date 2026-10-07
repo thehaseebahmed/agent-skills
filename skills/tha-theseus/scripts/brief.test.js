@@ -86,12 +86,12 @@ function run(extra = []) {
 test('planning is blocked until a viewer-confirmed requirements brief exists', () => {
   const dir = run();
   assert.match(ok(dir, 'status').out, /finish requirements discovery in chat/);
-  refused(dir, /finish and submit the requirements brief/, 'serve');
-  refused(dir, /confirm the brief first/, 'plan', '--file', file(dir, 'plan', PLAN));
-  assert.match(ok(dir, 'brief', '--file', file(dir, 'brief', BRIEF)).out, /requirements brief saved/);
-  assert.match(ok(dir, 'status').out, /human confirms the requirements brief in the viewer/);
+  refused(dir, /finish and submit the requirements plan/, 'serve');
+  refused(dir, /confirm the plan first/, 'checkpoints', '--file', file(dir, 'plan', PLAN));
+  assert.match(ok(dir, 'brief', '--file', file(dir, 'brief', BRIEF)).out, /requirements plan saved/);
+  assert.match(ok(dir, 'status').out, /human confirms the requirements plan in the viewer/);
   core.approveBrief(core.resolvePaths(dir), { by: 'human (viewer)', source: 'viewer' });
-  ok(dir, 'plan', '--file', file(dir, 'plan', PLAN));
+  ok(dir, 'checkpoints', '--file', file(dir, 'plan', PLAN));
 });
 
 test('feature and bug briefs enforce the requirements schema', () => {
@@ -119,9 +119,9 @@ test('viewer renders, requests changes on, and approves the richer requirements 
   try {
     const page = await (await fetch(`http://127.0.0.1:${server.port}/?t=${server.token}`)).text();
     assert.match(page, /Requirements brief/);
-    assert.match((await (await post('/api/feedback', { brief: true, text: 'add an acceptance criterion' })).json()).message, /Changes requested on the brief/);
+    assert.match((await (await post('/api/feedback', { brief: true, text: 'add an acceptance criterion' })).json()).message, /Changes requested on the plan/);
     ok(dir, 'brief', '--file', file(dir, 'brief2', BUG_BRIEF));
-    assert.match((await (await post('/api/approve-brief')).json()).message, /Requirements brief approved/);
+    assert.match((await (await post('/api/approve-brief')).json()).message, /Requirements plan approved/);
   } finally { await server.close(); }
 });
 
@@ -137,7 +137,7 @@ test('unattended autonomy is viewer-only after brief approval', () => {
   const dir = run();
   refused(dir, /unattended autonomy can only be enabled in the viewer/, 'config', '--autonomy', 'unattended');
   ok(dir, 'brief', '--file', file(dir, 'brief', BRIEF));
-  assert.throws(() => core.setSettings(core.resolvePaths(dir), { autonomy: 'unattended' }, { source: 'viewer' }), /confirm the requirements brief/);
+  assert.throws(() => core.setSettings(core.resolvePaths(dir), { autonomy: 'unattended' }, { source: 'viewer' }), /confirm the requirements plan/);
   core.approveBrief(core.resolvePaths(dir), { by: 'human (viewer)', source: 'viewer' });
   core.setSettings(core.resolvePaths(dir), { autonomy: 'unattended' }, { source: 'viewer' });
   assert.strictEqual(JSON.parse(ok(dir, 'status', '--json').out).run.autonomy, 'unattended');
@@ -208,5 +208,5 @@ test('wait wakes when the viewer confirms the requirements brief', async () => {
   await new Promise(resolve => setTimeout(resolve, 700));
   core.approveBrief(core.resolvePaths(dir), { by: 'human (viewer)', source: 'viewer' });
   assert.strictEqual(await new Promise(resolve => waiting.on('exit', resolve)), 0);
-  assert.match(out, /brief confirmed — now do the research and plan the checkpoints/);
+  assert.match(out, /plan confirmed — now do the research and load the checkpoints/);
 });
