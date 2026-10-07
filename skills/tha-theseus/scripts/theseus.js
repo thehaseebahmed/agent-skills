@@ -60,10 +60,11 @@ const USAGE = `usage: theseus.js <command> [args]
   begin CP                            start a checkpoint (needs a clean tree)
   record CP red   [--cmd C]           run the tests; they must FAIL
   record CP tests [--cmd C]           gate 1: run the tests; they must pass
-  record CP visual --reviewer ID --findings N [--isolation none] [--note T]
+  record CP visual --reviewer ID (--verdict FILE | --findings 0) [--isolation none] [--note T]
   record CP visual --skip "reason"    only for checkpoints with ui: false
   record CP visual --carry "reason"   re-use an earlier visual pass after a non-visual fix
-  record CP review --reviewer ID --findings N [--isolation none] [--note T]
+  record CP review --reviewer ID (--verdict FILE | --findings 0) [--isolation none] [--note T]
+                                      FILE is the reviewer's reply, verbatim; the viewer shows every finding
   advance CP                          gate 4; viewer approval marks a checkpoint done
   diff CP [--since-review]            the checkpoint's diff for reviewers (or only what changed since the last review)
   wait [--timeout 540]                block until the human approves or sends feedback in the viewer
@@ -1054,11 +1055,12 @@ function screenshots(p, cpId) {
 function snapshot(p) {
   const { run, state } = loadRun(p);
   const checkpoints = state.checkpoints.map(cp => {
-    const gates = isActive(cp) ? gateStates(p, cp, fingerprint(p, cp)) : null;
+    const fp = isActive(cp) ? fingerprint(p, cp) : null;
+    const gates = fp ? gateStates(p, cp, fp) : null;
     const evidence = {};
     for (const gate of ['red', 'tests', 'visual', 'review']) evidence[gate] = readEvidence(p, cp.id, gate);
     const isolationNone = ['visual', 'review'].some(g => evidence[g] && Object.values(evidence[g].reviewers || {}).some(r => r.isolation === 'none'));
-    return { ...cp, gates, evidence, screenshots: screenshots(p, cp.id), isolationNone };
+    return { ...cp, gates, fp, evidence, screenshots: screenshots(p, cp.id), isolationNone };
   });
   return {
     run,
@@ -1319,9 +1321,16 @@ function recordPanel(p, cp, gate, flags, fp, states) {
   }
 
   const reviewer = requireFlag(flags, 'reviewer', 'a distinct id per reviewer subagent, e.g. review-a');
+  const verdictFile = stringFlag(flags, 'verdict');
+  const verdict = verdictFile ? readVerdict(verdictFile) : null;
+  if (flags.findings === undefined && verdict) flags.findings = String(verdict.count);
   const findings = Number(flags.findings);
   if (flags.findings === undefined || !Number.isInteger(findings) || findings < 0) {
-    fail('--findings must be a whole number ≥ 0 — the count of open findings this reviewer reported');
+    fail('--findings must be a whole number ≥ 0 — the count of open findings this reviewer reported (or give --verdict FILE)');
+  }
+  if (verdict && verdict.count !== findings) fail(`--findings ${findings} does not match the verdict's FINDINGS: ${verdict.count}`);
+  if (findings > 0 && !verdict) {
+    fail('findings need their details: save the reviewer\'s reply to a file and pass --verdict FILE, so the human can see every finding in the viewer');
   }
   const known = Object.keys(evidence.reviewers);
   if (gate === 'review' && !known.includes(reviewer) && known.length >= required) {
@@ -1334,6 +1343,16 @@ function recordPanel(p, cp, gate, flags, fp, states) {
     fp,
     at,
   };
+  // Every verdict is kept, so a re-review never hides what an earlier round found.
+  evidence.history = evidence.history || [];
+  evidence.history.push({
+    reviewer,
+    round: evidence.history.filter(h => h.reviewer === reviewer).length + 1,
+    ...evidence.reviewers[reviewer],
+    verdict: verdict ? verdict.verdict : (findings ? 'FINDINGS' : 'PASS'),
+    summary: verdict ? verdict.summary : null,
+    items: verdict ? verdict.items : [],
+  });
   if (gate === 'review') evidence.reviewedTree = reviewTrees(p, cp);
   writeJson(file, evidence);
   const after = panelState(evidence, fp, required);
@@ -1346,6 +1365,54 @@ function recordPanel(p, cp, gate, flags, fp, states) {
   } else {
     console.log(`theseus: ${cp.id} ${label} — ${reviewer} clean; ${explainGate(label, after, cp.id, required)}.`);
   }
+}
+
+const VERDICT_MAX = 64 * 1024;
+
+/**
+ * Parse a reviewer's reply (the block reviewer.md asks for) into its verdict,
+ * count, summary and numbered findings. A finding written as
+ * `where — what — rule — fix` is split into those parts; anything else is kept
+ * as plain text. Lines under a numbered finding continue it.
+ */
+function parseVerdict(text) {
+  const lines = String(text).replace(/\r\n?/g, '\n').split('\n');
+  let verdict = null;
+  let count = null;
+  let summary = null;
+  const items = [];
+  let current = null;
+  for (const raw of lines) {
+    const line = raw.replace(/^\s*```\w*\s*$/, '');
+    let m;
+    if ((m = /^\s*VERDICT:\s*(\S+)/i.exec(line))) { verdict = m[1].toUpperCase(); current = null; continue; }
+    if ((m = /^\s*FINDINGS:\s*(\d+)/i.exec(line))) { count = Number(m[1]); current = null; continue; }
+    if ((m = /^\s*SUMMARY:\s*(.*)$/i.exec(line))) { summary = m[1].trim(); current = null; continue; }
+    if ((m = /^\s*(\d+)[.)]\s+(.*)$/.exec(line)) && count !== null) {
+      current = { text: m[2].trim() };
+      items.push(current);
+      continue;
+    }
+    if (current && line.trim()) current.text += `\n${line.trim()}`;
+    else if (summary !== null && line.trim() && !current) summary += ` ${line.trim()}`;
+  }
+  if (!['PASS', 'FINDINGS'].includes(verdict)) fail('the verdict has no VERDICT: PASS or VERDICT: FINDINGS line — save the reviewer\'s reply exactly as reviewer.md asks for it');
+  if (count === null) fail('the verdict has no FINDINGS: <count> line');
+  if (verdict === 'PASS' && count > 0) fail(`the verdict says PASS with FINDINGS: ${count} — that is invalid; ask the reviewer again`);
+  if (verdict === 'FINDINGS' && count === 0) fail('the verdict says FINDINGS with FINDINGS: 0 — that is invalid; ask the reviewer again');
+  if (items.length !== count) fail(`the verdict says FINDINGS: ${count} but lists ${items.length} numbered finding${items.length === 1 ? '' : 's'}`);
+  for (const item of items) {
+    const parts = item.text.split(/\s+[—–]\s+/);
+    if (parts.length === 4 && !item.text.includes('\n')) Object.assign(item, { where: parts[0], what: parts[1], rule: parts[2], fix: parts[3] });
+  }
+  return { verdict, count, summary, items };
+}
+
+function readVerdict(file) {
+  const full = path.resolve(file);
+  if (!fs.existsSync(full) || !fs.statSync(full).isFile()) fail(`--verdict: '${file}' is not a file`);
+  if (fs.statSync(full).size > VERDICT_MAX) fail(`--verdict: '${file}' is larger than ${VERDICT_MAX / 1024} KB — give the reviewer's verdict block, not its whole transcript`);
+  return parseVerdict(fs.readFileSync(full, 'utf8'));
 }
 
 function cmdRecord(p, { positionals, flags }) {
@@ -1949,6 +2016,7 @@ function printNext(p) {
 
 module.exports = {
   GateError,
+  parseVerdict,
   setSettings,
   resolvePaths,
   pathsFor,

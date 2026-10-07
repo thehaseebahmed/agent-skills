@@ -65,9 +65,9 @@ for every checkpoint, UI ones included. `record … visual` is then refused.
    **appearance** (spacing, size, alignment, typography, colour, copy). The other
    judges **interaction** (what happens on tap, type, submit and error, and the
    transitions between states).
-4. Record each:
-   `theseus record CP visual --reviewer look --findings N` and
-   `--reviewer behave --findings N`. The gate passes when two distinct reviewers report
+4. Save each reply verbatim to a file and record it:
+   `theseus record CP visual --reviewer look --verdict look.txt` and
+   `--reviewer behave --verdict behave.txt`. The gate passes when two distinct reviewers report
    zero findings at the current code (enforced).
 
 **Model choice:** if the harness lets you pick a reviewer's model, consider a
@@ -100,8 +100,15 @@ The run's `reviewers` setting is the exact number of code reviewers: 0, 1 or 2.
   - the output of `theseus learnings`
 
   Not the plan, not the builder's notes, not your summary.
-- Each returns a verdict. Record it:
-  `theseus record CP review --reviewer a --findings N [--note "<summary>"]`.
+- Each returns a verdict. Save the reply verbatim to a file and record it:
+  `theseus record CP review --reviewer a --verdict a.txt [--note "<summary>"]`.
+  - The count comes from the reply's `FINDINGS:` line; `--findings N` is optional
+    and must agree with it.
+  - The reply is refused when its count and its numbered findings disagree, or when
+    it says `PASS` with findings.
+  - Any findings need `--verdict` (enforced): a count alone tells the human nothing.
+  - Every round is kept. The viewer lists each one, newest first, with its findings
+    split into where, what, the rule broken and what correct looks like.
 - The gate passes only when two **distinct** reviewer ids report **zero** findings,
   both at the current code (enforced). One reviewer, or the same id twice, is refused.
 

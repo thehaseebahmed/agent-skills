@@ -135,6 +135,16 @@
   td.note { min-width: 160px; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
   th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  .rounds { margin-top: 10px; display: grid; gap: 8px; }
+  .round { border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; background: var(--panel-2); }
+  .round .head { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; font-size: 13px; }
+  .round .head b { overflow-wrap: anywhere; }
+  .round .sum { margin: 6px 0 0; font-size: 13px; }
+  .round ol { margin: 6px 0 0; padding-left: 20px; font-size: 13px; }
+  .round li { margin-top: 6px; overflow-wrap: anywhere; }
+  .round li .where { font-family: var(--mono); font-size: 12px; }
+  .round li .kv { display: block; color: var(--muted); }
+  .round li .text { white-space: pre-wrap; }
   .shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; margin-top: 8px; }
   .shots a { display: block; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: var(--panel-2); }
   .shots img { display: block; width: 100%; height: 120px; object-fit: cover; }
@@ -470,6 +480,30 @@
       <td>${r.isolation === 'none' ? '<span class="pill s-stale">none</span>' : 'subagent'}</td><td class="note">${esc(r.note || '')}</td><td class="nowrap">${esc(ago(r.at))}</td></tr>`).join('')}</table></div>`;
   }
 
+  // Every verdict ever recorded for this gate, newest first, with its findings in full.
+  function reviewRounds(ev, fp) {
+    const history = (ev.history || []).slice().reverse();
+    if (!history.length) return '';
+    const latest = new Set();
+    const seen = new Set();
+    for (const h of history) if (!seen.has(h.reviewer)) { seen.add(h.reviewer); latest.add(h); }
+    const finding = f => f.where
+      ? `<li><span class="where">${esc(f.where)}</span> ${esc(f.what)}<span class="kv">Breaks: ${esc(f.rule)}</span><span class="kv">Correct: ${esc(f.fix)}</span></li>`
+      : `<li><span class="text">${esc(f.text)}</span></li>`;
+    return `<h4 style="margin-top:12px">Review rounds</h4><div class="rounds">${history.map(h => `
+      <div class="round">
+        <div class="head"><b>${esc(h.reviewer)}</b><span class="muted">round ${esc(h.round)}</span>
+          <span class="pill s-${h.findings ? 'findings' : 'pass'}">${h.findings ? `${esc(h.findings)} finding${h.findings === 1 ? '' : 's'}` : 'clean'}</span>
+          ${latest.has(h) ? '' : '<span class="pill">earlier round</span>'}
+          ${latest.has(h) && fp && h.fp !== fp ? '<span class="pill s-stale">older code</span>' : ''}
+          ${h.isolation === 'none' ? '<span class="pill s-stale">no isolation</span>' : ''}
+          <span class="muted">${esc(ago(h.at))}</span></div>
+        ${h.summary ? `<p class="sum">${esc(h.summary)}</p>` : ''}
+        ${h.note ? `<p class="sum muted">Note: ${esc(h.note)}</p>` : ''}
+        ${h.items && h.items.length ? `<ol>${h.items.map(finding).join('')}</ol>` : (h.findings ? '<p class="sum empty">Recorded without finding details.</p>' : '')}
+      </div>`).join('')}</div>`;
+  }
+
   function gateBody(cp, gate) {
     const ev = cp.evidence[gate];
     if (!ev) return '<p class="empty">Not run yet.</p>';
@@ -482,6 +516,7 @@
     if (ev.skip) parts.push(`<p>Skipped: ${esc(ev.skip.reason)}</p>`);
     if (ev.carry) parts.push(`<p>Carried forward: ${esc(ev.carry.reason)}</p>`);
     parts.push(reviewerTable(ev));
+    parts.push(reviewRounds(ev, cp.fp));
     if (gate === 'visual' && cp.screenshots.length) {
       parts.push(`<div class="shots">${cp.screenshots.map(f => {
         const src = `/evidence/${encodeURIComponent(cp.id)}/${encodeURIComponent(f)}?t=${encodeURIComponent(token)}`;

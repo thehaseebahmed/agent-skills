@@ -22,6 +22,14 @@ const CHECKPOINTS = [
   { title: 'Leave request form', done: 'form matches the mock in empty and error states', ui: true, tests: ['shows the error state'] },
 ];
 
+
+/** A reviewer's reply with `n` findings, saved to a file for `record … --verdict`. */
+function verdict(n) {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'theseus-verdict-')), 'verdict.txt');
+  const items = Array.from({ length: n }, (_, i) => `${i + 1}. src/x.js:${i + 1} — wrong ${i + 1} — rule ${i + 1} — fix ${i + 1}`);
+  fs.writeFileSync(file, [`VERDICT: ${n ? 'FINDINGS' : 'PASS'}`, `FINDINGS: ${n}`, ...items, `SUMMARY: ${n} problem(s).`].join('\n'));
+  return file;
+}
 function env() {
   const copy = { ...process.env };
   delete copy.CLAUDE_PROJECT_DIR;
@@ -212,7 +220,7 @@ test('open review findings block advance', () => {
   fs.writeFileSync(path.join(dir, 'impl.txt'), 'x');
   ok(dir, 'record', 'CP1', 'tests');
   ok(dir, 'record', 'CP1', 'visual', '--skip', 'logic only');
-  ok(dir, 'record', 'CP1', 'review', '--reviewer', 'a', '--findings', '2');
+  ok(dir, 'record', 'CP1', 'review', '--reviewer', 'a', '--verdict', verdict(2));
   ok(dir, 'record', 'CP1', 'review', '--reviewer', 'b', '--findings', '0');
   refused(dir, /gate 3 \(review\) for CP1 has open findings/, 'advance', 'CP1');
 });
