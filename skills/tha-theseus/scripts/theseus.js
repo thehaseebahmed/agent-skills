@@ -383,7 +383,10 @@ function snapshotTree(p, root, baseRef) {
   const env = { GIT_INDEX_FILE: index };
   try {
     git(root, ['read-tree', baseRef], env);
-    git(root, ['add', '-A', '--', ...pathspec(p, root)], env);
+    // git add refuses an exclude pathspec naming an ignored path, and an ignored
+    // state dir is left out of '.' anyway.
+    const ignored = spawnSync('git', ['check-ignore', '-q', p.base], { cwd: root }).status === 0;
+    git(root, ['add', '-A', '--', ...(ignored ? ['.'] : pathspec(p, root))], env);
     return git(root, ['write-tree'], env).toString('utf8').trim();
   } finally {
     fs.rmSync(index, { force: true });

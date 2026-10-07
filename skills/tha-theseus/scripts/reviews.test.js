@@ -65,10 +65,11 @@ function git(dir, ...args) {
 }
 
 /** A repo with one UI checkpoint begun; `init` takes the extra flags. */
-function started(extra = []) {
+function started(extra = [], { ignoreState = false } = {}) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'theseus-rev-')));
   git(dir, 'init', '-q');
   fs.writeFileSync(path.join(dir, 'check.js'), "process.exit(require('fs').existsSync('impl.txt') ? 0 : 1);\n");
+  if (ignoreState) fs.writeFileSync(path.join(dir, '.gitignore'), '.theseus\n');
   git(dir, 'add', '-A');
   git(dir, 'commit', '-q', '-m', 'initial');
   ok(dir, 'init', '--key', 'R', '--reference', 'mock.html', '--test-cmd', 'node check.js', ...extra);
@@ -107,6 +108,13 @@ test('defaults are visual on and two code reviewers; bad values are refused', ()
   refused(fresh, /--reviewers must be 0, 1 or 2, not '3'/, 'init', '--key', 'K', '--reference', 'r', '--test-cmd', 'c', '--reviewers', '3');
   refused(fresh, /--visual must be on or off, not 'maybe'/, 'init', '--key', 'K', '--reference', 'r', '--test-cmd', 'c', '--visual', 'maybe');
   refused(dir, /reviewers must be 0, 1 or 2, not '5'/, 'config', '--reviewers', '5');
+});
+
+test('reviews record when the project gitignores .theseus', () => {
+  const dir = started([], { ignoreState: true });
+  passVisual(dir);
+  ok(dir, 'record', 'CP1', 'review', '--reviewer', 'a', '--findings', '0');
+  assert.match(ok(dir, 'record', 'CP1', 'review', '--reviewer', 'b', '--findings', '0').out, /gate 3 \(review\) passed — 2 distinct reviewers clean/);
 });
 
 // ── code reviewers ───────────────────────────────────────────────────────────
