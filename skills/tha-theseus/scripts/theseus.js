@@ -66,6 +66,9 @@ const USAGE = `usage: theseus.js <command> [args]
   stop                                stop the server
   plan --file plan.json             submit the completed requirements plan for viewer approval
   checkpoints --file cps.json       load the checkpoint list (replaces an unstarted set)
+  coverage                            print what the coverage reviewer checks: the confirmed plan and the checkpoints
+  coverage (--verdict FILE | --findings 0) [--isolation none] [--note T]
+                                      record the coverage review; the checkpoints can't be approved until it passes
   add --file checkpoints.json       append checkpoints, e.g. from human feedback
   brief --file plan.json            legacy alias for 'plan' — submit the requirements plan
   begin CP                            start a checkpoint (needs a clean tree)
@@ -733,8 +736,9 @@ function runSummary(p, run, state, final) {
     reviews: {
       visual: { verdicts: verdicts('visual').length, findings: findings(verdicts('visual')) },
       code: { verdicts: verdicts('review').length, findings: findings(verdicts('review')) },
+      coverage: { verdicts: events.filter(e => e.event === 'coverage').length, findings: findings(events.filter(e => e.event === 'coverage')) },
     },
-    withoutIsolation: events.filter(e => e.event === 'gate' && e.isolation === 'none').length,
+    withoutIsolation: events.filter(e => ['gate', 'coverage'].includes(e.event) && e.isolation === 'none').length,
     learningsAdded: events.filter(e => e.event === 'learned').length,
     started: run.created || null,
     finished: finished.toISOString(),
@@ -794,6 +798,8 @@ function approveCheckpoints(p, { by, source }) {
   const { run, state } = loadRun(p);
   const pending = state.checkpoints.filter(c => !c.approved);
   if (pending.length === 0) fail('nothing to approve — every checkpoint is already approved');
+  const coverage = coverageState(run, state);
+  if (!PASSING.has(coverage)) fail(explainCoverage(coverage));
   for (const cp of pending) {
     cp.approved = true;
     cp.plannedBy = { by, source };
@@ -859,6 +865,49 @@ function advance(p, cpId, { by = null, source = 'cli' } = {}) {
   log(p, 'approved', { cp: cp.id, ...approval });
   const next = state.checkpoints.find(c => c.status === 'pending');
   return { done: true, cp, approval, next };
+}
+
+// ── coverage review: the planned checkpoints against the confirmed plan ──────
+
+const COVERAGE_REVIEWER = 'coverage';
+const PLAN_META = new Set(['status', 'submitted', 'confirmedBy']);
+
+/** The confirmed plan as the coverage reviewer reads it: the human-agreed content, without its bookkeeping. */
+function planForReview(run) {
+  return Object.fromEntries(Object.entries(run.plan).filter(([key]) => !PLAN_META.has(key)));
+}
+
+/** The checkpoints the planner derived from the plan. Ones added later from human feedback are scope the human asked for. */
+function plannedCheckpoints(state) {
+  return state.checkpoints
+    .filter(c => c.origin === 'plan')
+    .map(c => ({ id: c.id, title: c.title, done: c.done, ui: c.ui, tests: c.tests, ...(c.repos ? { repos: c.repos } : {}) }));
+}
+
+/** The review applies while a confirmed plan has planned checkpoints that no human has approved yet. */
+function coverageApplies(run, state) {
+  const planned = state.checkpoints.filter(c => c.origin === 'plan');
+  return Boolean(run.plan && run.plan.status === 'confirmed' && planned.length && planned.some(c => !c.approved));
+}
+
+/** A hash of the plan and the planned checkpoints: reloading a changed list makes an earlier verdict stale. */
+function coverageFingerprint(run, state) {
+  const body = JSON.stringify({ plan: planForReview(run), checkpoints: plannedCheckpoints(state) });
+  return crypto.createHash('sha256').update(body).digest('hex');
+}
+
+function coverageState(run, state) {
+  if (!coverageApplies(run, state)) return 'off';
+  return panelState(state.coverage, coverageFingerprint(run, state), 1);
+}
+
+function explainCoverage(coverageStatus) {
+  const hints = {
+    none: 'the coverage review has not run — one isolated reviewer must check the checkpoints against the confirmed plan before they can be approved',
+    stale: 'the coverage review passed against an older checkpoint list — the checkpoints changed, so it must run again',
+    findings: 'the coverage review has open findings — revise the checkpoints (theseus.js checkpoints --file F), then review again',
+  };
+  return hints[coverageStatus] || `the coverage review is '${coverageStatus}'`;
 }
 
 function settingsOf(run) {
@@ -1179,6 +1228,13 @@ function nextAction(p, state, run) {
     return `gates passed: theseus.js advance ${active.id}`;
   }
   const next = state.checkpoints.find(c => c.status === 'pending');
+  const coverage = run ? coverageState(run, state) : 'off';
+  if (next && !next.approved && coverage === 'findings') {
+    return 'the coverage review found gaps: a fresh theseus-planner revises the checkpoints from its findings, then theseus.js checkpoints --file F and review again';
+  }
+  if (next && !next.approved && !PASSING.has(coverage)) {
+    return 'coverage review: one isolated theseus-reviewer checks the checkpoints against the plan (input: theseus.js coverage), then: theseus.js coverage --verdict FILE';
+  }
   if (next && !next.approved) {
     const ids = state.checkpoints.filter(c => !c.approved).map(c => c.id).join(', ');
     return `human approves the plan (${ids}) in the viewer; agent runs: theseus.js wait`;
@@ -1209,10 +1265,17 @@ function snapshot(p) {
   // name is `plan`; `brief` is removed in the next viewer update.
   if (run.plan) run.brief = run.plan;
   if (run.planRequired !== undefined) run.briefRequired = run.planRequired;
+  const coverage = {
+    state: coverageState(run, state),
+    fp: coverageApplies(run, state) ? coverageFingerprint(run, state) : null,
+    evidence: state.coverage || null,
+  };
+  const coverageIsolationNone = Boolean(state.coverage && Object.values(state.coverage.reviewers || {}).some(r => r.isolation === 'none'));
   return {
     run,
     settings: settingsFor(run),
     checkpoints,
+    coverage,
     next: nextAction(p, state, run),
     learnings: readLearnings(p),
     feedback: readFeedback(p).items,
@@ -1221,6 +1284,7 @@ function snapshot(p) {
     summary: readJson(path.join(p.run, 'summary.json'), null),
     warnings: {
       isolationNone: checkpoints.filter(c => c.isolationNone).map(c => c.id),
+      coverageIsolationNone,
       deferredApprovals: checkpoints.filter(c => c.approval && c.approval.deferred).map(c => c.id),
     },
   };
@@ -1243,6 +1307,7 @@ function summary(snap) {
       approval: c.approval,
       isolationNone: c.isolationNone,
     })),
+    coverage: snap.coverage.state,
     next: snap.next,
     learnings: snap.learnings.length,
     unreadFeedback: snap.feedback.filter(f => !f.read).length,
@@ -1360,12 +1425,69 @@ function cmdCheckpoints(p, { flags }) {
   state.checkpoints = normalizeCheckpoints(readJson(requireFlag(flags, 'file')), 0, 'plan', repoNames(run));
   save(p, run, state);
   log(p, 'checkpoints-loaded', { count: state.checkpoints.length });
-  console.log(`theseus: ${state.checkpoints.length} checkpoint(s) loaded at size ${settingsOf(run).granularity} — the human reviews and approves them in the viewer`);
+  const reviewFirst = coverageApplies(run, state) ? ' — the coverage review checks them against the plan, then the human approves them in the viewer' : ' — the human reviews and approves them in the viewer';
+  console.log(`theseus: ${state.checkpoints.length} checkpoint(s) loaded at size ${settingsOf(run).granularity}${reviewFirst}`);
 }
 
 // Legacy alias: `theseus plan` still loads checkpoints, for callers that
 // have not migrated to `theseus checkpoints`. The new canonical name is `checkpoints`.
 const cmdLoadPlan = cmdCheckpoints;
+
+/**
+ * The coverage review. With no flags it prints the reviewer's input: the
+ * confirmed plan and the planned checkpoints. With --verdict (or --findings 0)
+ * it records the reviewer's reply against the current list.
+ */
+function cmdCoverage(p, { flags }) {
+  const { run, state } = loadRun(p);
+  const recording = flags.verdict !== undefined || flags.findings !== undefined;
+  if (!run.plan || run.plan.status !== 'confirmed') fail('there is no confirmed plan to check the checkpoints against — the human confirms it in the viewer first');
+  if (!state.checkpoints.some(c => c.origin === 'plan')) fail('no checkpoints are loaded yet — the planner writes them, then: theseus.js checkpoints --file F');
+  if (!recording) {
+    console.log(JSON.stringify({ plan: planForReview(run), checkpoints: plannedCheckpoints(state) }, null, 2));
+    return;
+  }
+  assertOpen(run);
+  if (!coverageApplies(run, state)) fail('the planned checkpoints are already approved — the coverage review runs before approval, not after');
+  const verdictFile = stringFlag(flags, 'verdict');
+  const verdict = verdictFile ? readVerdict(verdictFile) : null;
+  if (flags.findings === undefined && verdict) flags.findings = String(verdict.count);
+  const findings = Number(flags.findings);
+  if (flags.findings === undefined || !Number.isInteger(findings) || findings < 0) {
+    fail('--findings must be a whole number ≥ 0 — the count of findings the coverage reviewer reported (or give --verdict FILE)');
+  }
+  if (verdict && verdict.count !== findings) fail(`--findings ${findings} does not match the verdict's FINDINGS: ${verdict.count}`);
+  if (findings > 0 && !verdict) {
+    fail('findings need their details: save the reviewer\'s reply to a file and pass --verdict FILE, so the human can see every finding in the viewer');
+  }
+  const fp = coverageFingerprint(run, state);
+  const evidence = state.coverage || { reviewers: {}, history: [] };
+  const at = new Date().toISOString();
+  evidence.reviewers[COVERAGE_REVIEWER] = {
+    findings,
+    isolation: flags.isolation === 'none' ? 'none' : 'subagent',
+    note: stringFlag(flags, 'note') || undefined,
+    fp,
+    at,
+  };
+  // Every round is kept, as for the gates, so a re-review never hides what an earlier one found.
+  evidence.history.push({
+    reviewer: COVERAGE_REVIEWER,
+    round: evidence.history.length + 1,
+    ...evidence.reviewers[COVERAGE_REVIEWER],
+    verdict: verdict ? verdict.verdict : (findings ? 'FINDINGS' : 'PASS'),
+    summary: verdict ? verdict.summary : null,
+    items: verdict ? verdict.items : [],
+  });
+  state.coverage = evidence;
+  save(p, run, state);
+  log(p, 'coverage', { reviewer: COVERAGE_REVIEWER, result: findings ? `${findings} finding(s)` : 'clean', isolation: evidence.reviewers[COVERAGE_REVIEWER].isolation });
+  if (findings > 0) {
+    console.log(`theseus: coverage review NOT passed — ${findings} finding(s). A fresh theseus-planner revises the checkpoints from them; load the new list with theseus.js checkpoints --file F, then review again.`);
+  } else {
+    console.log('theseus: coverage review passed — the checkpoints cover the plan and nothing beyond it. The human can now approve them in the viewer.');
+  }
+}
 
 function cmdAdd(p, { flags }) {
   const { run, state } = loadRun(p);
@@ -1746,8 +1868,10 @@ function cmdStatus(p, { flags }) {
     const gates = r.gates ? `  red:${r.gates.red} tests:${r.gates.tests} visual:${r.gates.visual} review:${r.gates.review}` : '';
     console.log(`  ${r.id.padEnd(5)} ${r.status.padEnd(17)} ${r.title}${gates}`);
   }
+  if (snap.coverage.state !== 'off') console.log(`  coverage review: ${snap.coverage.state}`);
   const w = snap.warnings;
   if (w.isolationNone.length) console.log(`  WARNING: reviewed without context isolation: ${w.isolationNone.join(', ')}`);
+  if (w.coverageIsolationNone) console.log('  WARNING: coverage review recorded without context isolation');
   if (w.deferredApprovals.length) console.log(`  approval deferred to PR review: ${w.deferredApprovals.join(', ')}`);
   if (isMulti(snap.run)) {
     console.log(`  repos: ${snap.run.repos.map(x => x.name).join(', ')}`);
@@ -2041,7 +2165,7 @@ const AGENTS = {
   },
   reviewer: {
     source: 'reviewer.md',
-    description: 'Theseus adversarial reviewer for gates 2 and 3. Judges a diff or a pair of screenshots against the given standards and reference only, and returns a VERDICT/FINDINGS block.',
+    description: 'Theseus adversarial reviewer for the coverage review and gates 2 and 3. Judges a checkpoint list against the plan, a diff, or a pair of screenshots against the given standards and reference only, and returns a VERDICT/FINDINGS block.',
     claudeTools: 'Read, Grep, Glob',
     copilotTools: "['read', 'search']",
     omitClaudeMd: true, // blind to project instructions by design
@@ -2157,6 +2281,7 @@ function cmdAgents(cwd, { flags }) {
 const COMMANDS = {
   plan: cmdPlan,
   checkpoints: cmdCheckpoints,
+  coverage: cmdCoverage,
   add: cmdAdd,
   begin: cmdBegin,
   record: cmdRecord,
@@ -2205,7 +2330,8 @@ async function main(argv) {
         p = withRunDir(p, findRun(p, args.flags.run).dir);
       }
       // Output that is handed to subagents verbatim stays free of notices.
-      const pure = command === 'diff' || command === 'learnings' || (command === 'status' && args.flags.json);
+      const pure = command === 'diff' || command === 'learnings' || (command === 'status' && args.flags.json)
+        || (command === 'coverage' && args.flags.verdict === undefined && args.flags.findings === undefined);
       if (!foreground && !pure && command !== 'wait') announceSettings(p);
       await COMMANDS[command](p, args);
       if (!pure && !['status', 'stop', 'serve', 'runs'].includes(command) && fs.existsSync(p.runFile)) printNext(p);

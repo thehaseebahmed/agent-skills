@@ -10,6 +10,41 @@ ignores the state directory.
 - `advance` re-computes it and refuses any gate whose fingerprint no longer matches.
 - Committing mid-checkpoint does not change it; editing a file does.
 
+## Coverage review (before checkpoint approval)
+
+Once per checkpoint list, before any checkpoint begins. It proves the list builds
+what the human agreed to in the plan: no more, no less.
+
+- **Applies** while a confirmed plan has planned checkpoints no human has approved.
+  Checkpoints added later with `add` come from the human's own feedback, so they
+  skip it.
+- **One reviewer**, in a fresh subagent, given only:
+  - the coverage section of [reviewer.md](reviewer.md)
+  - the output of `theseus coverage`: the confirmed plan and the planned checkpoints
+  - any ruling the human made on an earlier coverage finding
+
+  Not the reference, the code, or the planner's reasoning: it judges the list
+  against the plan, not against what the planner meant.
+- `theseus coverage --verdict cov.txt [--isolation none] [--note T]` records the
+  reply, parsed and checked like a gate 3 verdict. Findings without `--verdict`
+  are refused (enforced).
+- Every pass stores a hash of the plan and the planned checkpoints. Loading a
+  changed list with `checkpoints` makes it stale (enforced).
+- **The checkpoints cannot be approved** in the viewer, or through the API, until a
+  review is clean at the current list (enforced).
+
+### When there are findings
+
+1. A **fresh** `theseus-planner` gets the confirmed plan, the reference, the current
+   list and the findings, and revises the list. Not the planner that wrote it.
+2. Load it again: `theseus checkpoints --file F`.
+3. A fresh reviewer checks the revised list, with its previous findings.
+4. Repeat until clean.
+
+If the human disagrees with a finding (they want that extra checkpoint after all,
+say), the human decides, not you or the reviewer. Pass their ruling to the next
+reviewer as part of the plan; never drop a finding on your own authority.
+
 ## Red (before gate 1)
 
 - The builder writes the checkpoint's planned tests. No implementation yet.

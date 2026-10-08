@@ -76,6 +76,7 @@ function started(extra = []) {
   fs.writeFileSync(plan, JSON.stringify([{ title: 'Form', done: 'matches the mock', ui: true, tests: ['error state'] }]));
   confirmBrief(dir);
   ok(dir, 'checkpoints', '--file', plan);
+  ok(dir, 'coverage', '--findings', '0');
   core.approvePlan(core.resolvePaths(dir), { by: 'human (viewer)', source: 'viewer' });
   ok(dir, 'begin', 'CP1');
   ok(dir, 'record', 'CP1', 'red');

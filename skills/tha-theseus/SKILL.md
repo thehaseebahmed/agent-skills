@@ -86,7 +86,7 @@ You are the **orchestrator**. You coordinate; you do not build. Three kinds of
 |---|---|---|
 | `theseus-planner` | pre-flight, checkpoints, planned tests | [checkpoints.md](checkpoints.md) |
 | `theseus-builder` | one checkpoint: failing tests, then the code. In fix mode, it fixes findings | [builder.md](builder.md) |
-| `theseus-reviewer` | one independent verdict, visual or code | [reviewer.md](reviewer.md) |
+| `theseus-reviewer` | one independent verdict: plan coverage, visual or code | [reviewer.md](reviewer.md) |
 
 Long runs fail when one context window carries everything. Every subagent's start-up
 costs tokens too, so keep both down:
@@ -95,7 +95,8 @@ costs tokens too, so keep both down:
   narrow tools, an effort level and a turn cap. In Claude Code the planner and
   reviewer also skip CLAUDE.md; in opencode they are permission-locked read-only.
 - **Hand each subagent only its inputs:** the checkpoint, the learnings, and for
-  reviewers `theseus diff CP`. Never the plan, a transcript, or your own reasoning.
+  reviewers `theseus diff CP` (`theseus coverage` for the coverage reviewer). Never
+  a transcript or your own reasoning, and the plan only to the planner.
 - **Keep only their short reply.** The briefs cap it at about 10 lines.
 - **Don't read test output.** The script runs the tests, keeps the output and shows
   it in the viewer. Read it only when a gate fails and the failure line isn't enough.
@@ -335,6 +336,13 @@ theseus checkpoints --file /tmp/checkpoints.json
 The checkpoints appear in the viewer at once, each with its done-criteria and
 planned tests.
 
+**Coverage review.** One isolated `theseus-reviewer`, given only
+[reviewer.md](reviewer.md) and `theseus coverage`, checks the list against the
+confirmed plan: nothing missed, no scope creep. Record its reply verbatim with
+`theseus coverage --verdict cov.txt`. On findings a fresh planner revises the list,
+you reload it, and a fresh reviewer checks it again. The human cannot approve until
+it passes ([gates.md](gates.md#coverage-review-before-checkpoint-approval)).
+
 **Stop here.** Nothing is built until the human approves the list. This is also
 the moment they pick the run settings: with the checkpoints in front of them — its
 checkpoint count, which are UI, how big each is — they can set the header chips
@@ -484,7 +492,7 @@ Other harnesses rely on the script's refusals alone.
 
 - A checkpoint larger than S, or one whose `done` cannot be observed
 - Code written before the plan was approved
-- A reviewer brief that contains the builder's reasoning or the plan
+- A code or visual reviewer brief that contains the builder's reasoning or the plan
 - The same subagent building and fixing, or reviewing its own fix
 - No new learning after a checkpoint that had findings
 - Hand-edits to anything under `.theseus/`: that is the script's state

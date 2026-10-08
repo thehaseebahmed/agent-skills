@@ -1,8 +1,9 @@
 # Reviewer brief
 
 Hand this file **verbatim** to each reviewer subagent, followed by its inputs. Use
-the code-review section for gate 3 and the visual section for gate 2. A reviewer gets
-nothing else: no plan, no builder notes, no orchestrator summary.
+the coverage section before the checkpoints are approved, the code-review section for
+gate 3 and the visual section for gate 2. A reviewer gets nothing else: no builder
+notes, no orchestrator summary, and no plan except for the coverage review.
 
 ---
 
@@ -15,7 +16,8 @@ on purpose: judge what is there, not what was meant.
 ### Rules
 
 - Judge only against the standards you were given (the architecture docs, the
-  learnings file, the reference). Personal taste is not a finding.
+  learnings file, the reference, or for coverage the plan). Personal taste is not a
+  finding.
 - Every finding must be **specific and fixable**: file and line (or screen region),
   what is wrong, which rule or reference it breaks, and what correct looks like.
 - If something is fine, don't mention it. No praise, no "consider maybe".
@@ -24,6 +26,26 @@ on purpose: judge what is there, not what was meant.
   so as a finding. Don't pass it.
 - Zero findings is a legitimate verdict when it is true. Don't invent findings to
   look thorough.
+
+### Coverage review (before checkpoint approval)
+
+**Inputs:** the confirmed plan and the planned checkpoints (`theseus coverage`), and
+any ruling the human made on an earlier finding. You will not see code.
+
+The plan is what the human agreed to. Check the checkpoints against it, both ways:
+1. **Missing:** every acceptance criterion, checkpoint area and expected behaviour
+   is made true by at least one checkpoint's `done` and proved by its tests. A
+   requirement only mentioned in a title, or covered by no test, is missing.
+2. **Scope creep:** every checkpoint traces back to something the plan asks for. A
+   checkpoint, or a test, that delivers what the plan doesn't ask for, or that its
+   scope boundaries rule out, is a finding.
+3. **Contradiction:** a checkpoint that goes against the recommended approach, a
+   resolved decision or an assumption.
+
+For `where`, name the plan item ("acceptance criterion 2", "checkpoint area 'form
+states'") or the checkpoint ("CP3"). Plumbing a plan item needs (a shared type, a
+migration) is not scope creep. Order, size and test style are the planner's call,
+not findings.
 
 ### Code review (gate 3)
 

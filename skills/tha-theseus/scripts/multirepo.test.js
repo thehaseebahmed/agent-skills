@@ -87,6 +87,7 @@ const PLAN = [
 
 /** The human clicks Approve plan in the viewer; the agent never approves. */
 function viewerApprovePlan(dir) {
+  ok(dir, 'coverage', '--findings', '0');
   core.approvePlan(core.resolvePaths(dir), { by: 'human (viewer)', source: 'viewer' });
 }
 
