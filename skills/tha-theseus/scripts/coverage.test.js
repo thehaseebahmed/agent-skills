@@ -139,8 +139,14 @@ test('checkpoints added from human feedback are approved without a coverage revi
   assert.deepStrictEqual(approve(dir).cps, ['CP3']);
 });
 
-test('isolation none is recorded and warned about', () => {
+test('isolation none is recorded and warned about; model needs --via; unknown values are refused', () => {
   const dir = planned();
+  refused(dir, /--isolation must be none or model \(got shared\)/, 'coverage', '--findings', '0', '--isolation', 'shared');
+  refused(dir, /--isolation model needs --via/, 'coverage', '--findings', '0', '--isolation', 'model');
+  ok(dir, 'coverage', '--findings', '0', '--isolation', 'model', '--via', 'some-model');
+  assert.doesNotMatch(ok(dir, 'status').out, /WARNING/);
+  const snap = JSON.parse(ok(dir, 'status', '--json', '--full').out);
+  assert.deepStrictEqual([snap.coverage.evidence.reviewers.coverage.isolation, snap.coverage.evidence.reviewers.coverage.via], ['model', 'some-model']);
   ok(dir, 'coverage', '--findings', '0', '--isolation', 'none');
   assert.match(ok(dir, 'status').out, /WARNING: coverage review recorded without context isolation/);
 });

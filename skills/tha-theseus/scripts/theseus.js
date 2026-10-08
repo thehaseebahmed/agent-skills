@@ -67,7 +67,7 @@ const USAGE = `usage: theseus.js <command> [args]
   plan --file plan.json             submit the completed requirements plan for viewer approval
   checkpoints --file cps.json       load the checkpoint list (replaces an unstarted set)
   coverage                            print what the coverage reviewer checks: the confirmed plan and the checkpoints
-  coverage (--verdict FILE | --findings 0) [--isolation none] [--note T]
+  coverage (--verdict FILE | --findings 0) [--isolation none|model] [--via TEXT] [--note T]
                                       record the coverage review; the checkpoints can't be approved until it passes
   add --file checkpoints.json       append checkpoints, e.g. from human feedback
   brief --file plan.json            legacy alias for 'plan' — submit the requirements plan
@@ -1460,12 +1460,19 @@ function cmdCoverage(p, { flags }) {
   if (findings > 0 && !verdict) {
     fail('findings need their details: save the reviewer\'s reply to a file and pass --verdict FILE, so the human can see every finding in the viewer');
   }
+  const isolationFlag = stringFlag(flags, 'isolation');
+  if (isolationFlag && !['none', 'model'].includes(isolationFlag)) {
+    fail(`--isolation must be none or model (got ${isolationFlag}); leave it out for a fresh subagent`);
+  }
+  const via = stringFlag(flags, 'via');
+  if (isolationFlag === 'model' && !via) fail('--isolation model needs --via, naming the model that reviewed');
   const fp = coverageFingerprint(run, state);
   const evidence = state.coverage || { reviewers: {}, history: [] };
   const at = new Date().toISOString();
   evidence.reviewers[COVERAGE_REVIEWER] = {
     findings,
-    isolation: flags.isolation === 'none' ? 'none' : 'subagent',
+    isolation: isolationFlag || 'subagent',
+    via: via || undefined,
     note: stringFlag(flags, 'note') || undefined,
     fp,
     at,
@@ -1481,7 +1488,7 @@ function cmdCoverage(p, { flags }) {
   });
   state.coverage = evidence;
   save(p, run, state);
-  log(p, 'coverage', { reviewer: COVERAGE_REVIEWER, result: findings ? `${findings} finding(s)` : 'clean', isolation: evidence.reviewers[COVERAGE_REVIEWER].isolation });
+  log(p, 'coverage', { reviewer: COVERAGE_REVIEWER, result: findings ? `${findings} finding(s)` : 'clean', isolation: evidence.reviewers[COVERAGE_REVIEWER].isolation, via: via || undefined });
   if (findings > 0) {
     console.log(`theseus: coverage review NOT passed — ${findings} finding(s). A fresh theseus-planner revises the checkpoints from them; load the new list with theseus.js checkpoints --file F, then review again.`);
   } else {

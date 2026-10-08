@@ -25,7 +25,7 @@ what the human agreed to in the plan: no more, no less.
 
   Not the reference, the code, or the planner's reasoning: it judges the list
   against the plan, not against what the planner meant.
-- `theseus coverage --verdict cov.txt [--isolation none] [--note T]` records the
+- `theseus coverage --verdict cov.txt [--isolation none|model --via M] [--note T]` records the
   reply, parsed and checked like a gate 3 verdict. Findings without `--verdict`
   are refused (enforced).
 - Every pass stores a hash of the plan and the planned checkpoints. Loading a
