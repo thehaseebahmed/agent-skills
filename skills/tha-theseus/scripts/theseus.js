@@ -71,10 +71,10 @@ const USAGE = `usage: theseus.js <command> [args]
   begin CP                            start a checkpoint (needs a clean tree)
   record CP red   [--cmd C]           run the tests; they must FAIL
   record CP tests [--cmd C]           gate 1: run the tests; they must pass
-  record CP visual --reviewer ID (--verdict FILE | --findings 0) [--isolation none] [--note T]
+  record CP visual --reviewer ID (--verdict FILE | --findings 0) [--isolation none|model] [--via TEXT] [--note T]
   record CP visual --skip "reason"    only for checkpoints with ui: false
   record CP visual --carry "reason"   re-use an earlier visual pass after a non-visual fix
-  record CP review --reviewer ID (--verdict FILE | --findings 0) [--isolation none] [--note T]
+  record CP review --reviewer ID (--verdict FILE | --findings 0) [--isolation none|model] [--via TEXT] [--note T]
                                       FILE is the reviewer's reply, verbatim; the viewer shows every finding
   advance CP                          gate 4; viewer approval marks a checkpoint done
   diff CP [--since-review]            the checkpoint's diff for reviewers (or only what changed since the last review)
@@ -1492,9 +1492,17 @@ function recordPanel(p, cp, gate, flags, fp, states) {
   if (gate === 'review' && !known.includes(reviewer) && known.length >= required) {
     fail(`this run uses ${required} code reviewer${required === 1 ? '' : 's'}: ${known.join(', ')} — re-review with the same id${required === 1 ? '' : 's'}`);
   }
+  const isolationFlag = stringFlag(flags, 'isolation');
+  if (isolationFlag && !['none', 'model'].includes(isolationFlag)) {
+    fail(`--isolation must be none or model (got ${isolationFlag}); leave it out for a fresh subagent`);
+  }
+  // 'model' is a stateless model call made by the harness: no shared context, and the harness names it in --via.
+  const via = stringFlag(flags, 'via');
+  if (isolationFlag === 'model' && !via) fail('--isolation model needs --via, naming the model that reviewed');
   evidence.reviewers[reviewer] = {
     findings,
-    isolation: flags.isolation === 'none' ? 'none' : 'subagent',
+    isolation: isolationFlag || 'subagent',
+    via: via || undefined,
     note: stringFlag(flags, 'note') || undefined,
     fp,
     at,
@@ -1513,7 +1521,7 @@ function recordPanel(p, cp, gate, flags, fp, states) {
   writeJson(file, evidence);
   const after = panelState(evidence, fp, required);
   const label = gate === 'visual' ? 'gate 2 (visual)' : 'gate 3 (review)';
-  log(p, 'gate', { cp: cp.id, gate, reviewer, result: findings ? `${findings} finding(s)` : 'clean', isolation: evidence.reviewers[reviewer].isolation });
+  log(p, 'gate', { cp: cp.id, gate, reviewer, result: findings ? `${findings} finding(s)` : 'clean', isolation: evidence.reviewers[reviewer].isolation, via: via || undefined });
   if (after === 'pass') {
     console.log(`theseus: ${cp.id} ${label} passed — ${required} distinct reviewer${required === 1 ? '' : 's'} clean at the current code.`);
   } else if (findings > 0) {

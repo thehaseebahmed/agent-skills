@@ -485,7 +485,7 @@
     if (!rows.length) return '';
     return `<div class="scroll"><table><tr><th>Reviewer</th><th>Findings</th><th>Isolation</th><th>Note</th><th>When</th></tr>${rows.map(([id, r]) => `
       <tr><td>${esc(id)}</td><td><span class="pill s-${r.findings ? 'findings' : 'pass'}">${r.findings}</span></td>
-      <td>${r.isolation === 'none' ? '<span class="pill s-stale">none</span>' : 'subagent'}</td><td class="note">${esc(r.note || '')}</td><td class="nowrap">${esc(ago(r.at))}</td></tr>`).join('')}</table></div>`;
+      <td>${r.isolation === 'none' ? '<span class="pill s-stale">none</span>' : r.isolation === 'model' ? `model${r.via ? ` · ${esc(r.via)}` : ''}` : 'subagent'}</td><td class="note">${esc(r.note || '')}</td><td class="nowrap">${esc(ago(r.at))}</td></tr>`).join('')}</table></div>`;
   }
 
   // Every verdict ever recorded for this gate, newest first, with its findings in full.
@@ -505,6 +505,7 @@
           ${latest.has(h) ? '' : '<span class="pill">earlier round</span>'}
           ${latest.has(h) && fp && h.fp !== fp ? '<span class="pill s-stale">older code</span>' : ''}
           ${h.isolation === 'none' ? '<span class="pill s-stale">no isolation</span>' : ''}
+          ${h.via ? `<span class="pill">${esc(h.via)}</span>` : ''}
           <span class="muted">${esc(ago(h.at))}</span></div>
         ${h.summary ? `<p class="sum">${esc(h.summary)}</p>` : ''}
         ${h.note ? `<p class="sum muted">Note: ${esc(h.note)}</p>` : ''}

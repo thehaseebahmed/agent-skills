@@ -297,6 +297,22 @@ test('reviews without isolation are flagged in status', () => {
   assert.match(ok(dir, 'status').out, /WARNING: reviewed without context isolation: CP1/);
 });
 
+test('model reviews record their model and are not flagged', () => {
+  const dir = started();
+  ok(dir, 'record', 'CP1', 'red');
+  fs.writeFileSync(path.join(dir, 'impl.txt'), 'x');
+  ok(dir, 'record', 'CP1', 'tests');
+  ok(dir, 'record', 'CP1', 'visual', '--skip', 'logic only');
+  refused(dir, /--isolation model needs --via, naming the model that reviewed/, 'record', 'CP1', 'review', '--reviewer', 'a', '--findings', '0', '--isolation', 'model');
+  refused(dir, /--isolation must be none or model \(got fresh\)/, 'record', 'CP1', 'review', '--reviewer', 'a', '--findings', '0', '--isolation', 'fresh');
+  ok(dir, 'record', 'CP1', 'review', '--reviewer', 'a', '--findings', '0', '--isolation', 'model', '--via', 'openai/gpt-5');
+  assert.doesNotMatch(ok(dir, 'status').out, /WARNING: reviewed without context isolation/);
+  const snap = JSON.parse(ok(dir, 'status', '--json', '--full').out);
+  const cp = snap.checkpoints.find(c => c.id === 'CP1');
+  assert.strictEqual(cp.evidence.review.reviewers.a.via, 'openai/gpt-5');
+  assert.strictEqual(cp.evidence.review.history[0].isolation, 'model');
+});
+
 test('begin refuses a dirty working tree', () => {
   const dir = started();
   passGates(dir);

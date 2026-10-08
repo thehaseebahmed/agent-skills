@@ -154,3 +154,7 @@ checkpoints via `add`; they are not patched in silently.
 Record `--isolation none` on any visual or review verdict obtained without a fresh
 context, whether because the harness had no subagents or a headless session failed.
 `theseus status` prints a warning for every checkpoint that has one. Tell the human.
+
+A harness that reviews with a separate model call (no shared context, no tools) records
+`--isolation model --via <model>`. That counts as isolated; `--via` names the model, and the
+viewer shows it next to the verdict. `--isolation model` without `--via` is refused.
