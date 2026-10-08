@@ -112,6 +112,7 @@ How to get a fresh context:
 | Copilot (VS Code, CLI), without them | its subagent mechanism, likewise |
 | OpenCode, without them | the task tool's built-in subagents, with the brief file as the prompt |
 | Neither available | a fresh headless session: `claude -p "<brief>"` or `copilot -p "<brief>"` |
+| Hermes, with the Memento plugin | the plugin's `theseus_review` tool: a stateless model call that records the verdict itself with `--isolation model --via <model>` |
 | None of the above | do the work inline. For reviewers, record `--isolation none` |
 
 Never claim isolation you did not have. `theseus status` reports every review done
