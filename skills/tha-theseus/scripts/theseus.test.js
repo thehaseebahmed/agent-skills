@@ -77,6 +77,7 @@ function confirmBrief(dir) {
 
 /** The human clicks Approve plan in the viewer; the agent never approves. */
 function viewerApprovePlan(dir) {
+  ok(dir, 'coverage', '--findings', '0');
   core.approvePlan(core.resolvePaths(dir), { by: 'human (viewer)', source: 'viewer' });
 }
 
@@ -720,6 +721,7 @@ test('approving the plan records the settings the run proceeds with', () => {
   confirmBrief(dir);
   ok(dir, 'checkpoints', '--file', writeJsonFile(os.tmpdir(), `cps-${process.pid}.json`, CHECKPOINTS));
   core.setSettings(core.resolvePaths(dir), { reviewers: '1' }, { source: 'viewer' });
+  ok(dir, 'coverage', '--findings', '0');
   core.approvePlan(core.resolvePaths(dir), { by: 'human (viewer)', source: 'viewer' });
   const full = JSON.parse(ok(dir, 'status', '--json', '--full').out);
   const entry = full.log.find(e => e.event === 'checkpoints-approved');

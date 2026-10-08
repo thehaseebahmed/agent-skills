@@ -182,6 +182,7 @@
 
   <div id="banners"></div>
   <div id="plan"></div>
+  <div id="coverage"></div>
   <div id="summary"></div>
 
   <div class="grid">
@@ -370,7 +371,14 @@
       out.push(`<div class="banner warn"><p><b>The agent asks to ${completing ? 'complete' : 'abandon'} this run.</b> ${completing ? 'Every checkpoint is done.' : `Reason: ${esc(data.run.closeReason || '—')}`} Confirming saves a summary and moves the run to History.</p><button class="btn primary" data-close="confirm">Confirm ${completing ? 'complete' : 'abandon'}</button><button class="btn" data-close="keep">Keep open</button></div>`);
     }
     const unapproved = data.checkpoints.filter(c => !c.approved);
-    if (unapproved.length) {
+    const coverage = data.coverage ? data.coverage.state : 'off';
+    if (unapproved.length && !['pass', 'off'].includes(coverage)) {
+      const why = {
+        findings: 'The coverage review found gaps between the checkpoints and the plan you confirmed. The agent revises the checkpoints and has them reviewed again.',
+        stale: 'The checkpoints changed since the coverage review passed, so it runs again.',
+      }[coverage] || 'A coverage reviewer is checking that the checkpoints cover the plan you confirmed, add nothing it leaves out, and miss nothing.';
+      out.push(`<div class="banner"><p><b>${unapproved.length} checkpoint${unapproved.length > 1 ? 's' : ''} planned</b> (${unapproved.map(c => esc(c.id)).join(', ')}). ${why} You can approve them once it passes.</p><button class="btn primary" disabled>Approve checkpoints</button></div>`);
+    } else if (unapproved.length) {
       out.push(`<div class="banner"><p><b>${unapproved.length} checkpoint${unapproved.length > 1 ? 's' : ''} need your approval</b> before any code is written (${unapproved.map(c => esc(c.id)).join(', ')}). Read each one's done-criteria and tests below. Approving starts the run with the settings in the header chips — set them now if you want different ones.</p><button class="btn primary" id="approve-checkpoints">Approve checkpoints</button></div>`);
     }
     const waiting = data.checkpoints.find(c => c.status === 'awaiting-approval');
@@ -381,6 +389,7 @@
         : `<div class="banner warn"><p><b>${esc(waiting.id)} passed gates 1–3</b> and is waiting for you: ${esc(waiting.title)}</p><button class="btn" data-select="${esc(waiting.id)}">Review it</button></div>`);
     }
     const w = data.warnings;
+    if (w.coverageIsolationNone) out.push('<div class="banner warn"><p>The coverage review was recorded <b>without context isolation</b>. Treat it with suspicion.</p></div>');
     if (w.isolationNone.length) out.push(`<div class="banner warn"><p>Reviewed <b>without context isolation</b>: ${w.isolationNone.map(esc).join(', ')}. Treat those reviews with suspicion.</p></div>`);
     $('banners').innerHTML = out.join('');
   }
@@ -447,6 +456,24 @@
       : `<section class="panel card"><div class="body"><h3>Requirements plan ${pill}</h3>${body}</div></section>`;
   }
 
+  // The coverage review: the planned checkpoints checked against the confirmed plan, every round kept.
+  function renderCoverage() {
+    const cov = data.coverage;
+    if (!cov || (cov.state === 'off' && !cov.evidence)) {
+      $('coverage').innerHTML = '';
+      return;
+    }
+    const s = cov.state;
+    // 'off' with evidence means the checkpoints were approved, which needed this review to pass.
+    const head = `<b>Coverage review</b> <span class="pill s-${s === 'off' ? 'pass' : s}">${s === 'off' ? 'passed' : LABEL[s]}</span>`;
+    const body = cov.evidence ? reviewRounds(cov.evidence, cov.fp, 'older checkpoints') : '<p class="empty">Not run yet.</p>';
+    const intro = '<p class="muted">One isolated reviewer checks every acceptance criterion and checkpoint area in the plan is covered by a checkpoint, and that no checkpoint adds scope the plan does not ask for.</p>';
+    // Once the checkpoints are approved, keep it out of the way like the plan.
+    $('coverage').innerHTML = s === 'off'
+      ? `<details class="panel card"><summary class="body" style="cursor:pointer">${head}</summary><div class="body">${intro}${body}</div></details>`
+      : `<section class="panel card"><div class="body"><h3>${head}</h3>${intro}${body}</div></section>`;
+  }
+
   function renderSummary() {
     const sm = data.summary;
     if (!sm) {
@@ -462,6 +489,7 @@
         ${stat(sm.approvals.deferred, 'deferred to PR')}
         ${stat(`${sm.reviews.code.verdicts} / ${sm.reviews.code.findings}`, 'code verdicts / findings')}
         ${stat(`${sm.reviews.visual.verdicts} / ${sm.reviews.visual.findings}`, 'visual verdicts / findings')}
+        ${sm.reviews.coverage ? stat(`${sm.reviews.coverage.verdicts} / ${sm.reviews.coverage.findings}`, 'coverage verdicts / findings') : ''}
         ${stat(sm.withoutIsolation, 'reviews without isolation')}
         ${stat(sm.learningsAdded, 'learnings added')}
         ${stat(sm.durationMinutes === null ? '—' : sm.durationMinutes < 120 ? `${sm.durationMinutes} min` : `${Math.round(sm.durationMinutes / 60)} h`, 'duration')}
@@ -489,7 +517,7 @@
   }
 
   // Every verdict ever recorded for this gate, newest first, with its findings in full.
-  function reviewRounds(ev, fp) {
+  function reviewRounds(ev, fp, staleLabel = 'older code') {
     const history = (ev.history || []).slice().reverse();
     if (!history.length) return '';
     const latest = new Set();
@@ -503,7 +531,7 @@
         <div class="head"><b>${esc(h.reviewer)}</b><span class="muted">round ${esc(h.round)}</span>
           <span class="pill s-${h.findings ? 'findings' : 'pass'}">${h.findings ? `${esc(h.findings)} finding${h.findings === 1 ? '' : 's'}` : 'clean'}</span>
           ${latest.has(h) ? '' : '<span class="pill">earlier round</span>'}
-          ${latest.has(h) && fp && h.fp !== fp ? '<span class="pill s-stale">older code</span>' : ''}
+          ${latest.has(h) && fp && h.fp !== fp ? `<span class="pill s-stale">${staleLabel}</span>` : ''}
           ${h.isolation === 'none' ? '<span class="pill s-stale">no isolation</span>' : ''}
           ${h.via ? `<span class="pill">${esc(h.via)}</span>` : ''}
           <span class="muted">${esc(ago(h.at))}</span></div>
@@ -585,6 +613,7 @@
         case 'learned': return `learned: ${e.text}`;
         case 'planned': return `${e.count} checkpoints loaded`;
         case 'checkpoints-loaded': return `${e.count} checkpoints loaded`;
+        case 'coverage': return `coverage review: ${e.result}`;
         case 'added': return `added ${(e.cps || []).join(', ')}`;
         case 'init': return `run ${e.key} started`;
         case 'plan-submitted': return `requirements plan submitted (${e.areas} checkpoint area${e.areas === 1 ? '' : 's'})`;
@@ -618,7 +647,7 @@
       $('chips').innerHTML = runPicker(null);
       $('next').textContent = data.error;
       $('reference').textContent = '';
-      for (const id of ['banners', 'plan', 'summary', 'timeline']) $(id).innerHTML = '';
+      for (const id of ['banners', 'plan', 'coverage', 'summary', 'timeline']) $(id).innerHTML = '';
       $('detail').innerHTML = '<p class="empty">No active run. Pick one from the run menu to view it.</p>';
       return;
     }
@@ -632,6 +661,7 @@
     renderHeader();
     renderBanners();
     renderPlan();
+    renderCoverage();
     renderSummary();
     renderTimeline();
     renderDetail();

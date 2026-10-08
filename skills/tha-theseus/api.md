@@ -86,7 +86,7 @@ approving; never let the agent call these routes for them.
 | GET | `/api/events` | | Server-sent events. Each `data:` line is the same JSON as `/api/state`, sent on connect and again whenever it changes |
 | GET | `/evidence/CP/FILE` | | A screenshot from that checkpoint's evidence, by the file names in `screenshots` |
 | POST | `/api/approve-implementation-plan` | | Confirms the requirements plan |
-| POST | `/api/approve-checkpoints` | | Approves the planned checkpoints with the current settings |
+| POST | `/api/approve-checkpoints` | | Approves the planned checkpoints with the current settings; refused until the coverage review is clean on the current list |
 | POST | `/api/approve-brief` | | Legacy alias for `/api/approve-implementation-plan` |
 | POST | `/api/approve-plan` | | Legacy alias for `/api/approve-checkpoints` |
 | POST | `/api/approve/CP` | | Approves a checkpoint awaiting approval; refused unless all its gates pass on the current code |
@@ -111,9 +111,14 @@ approving; never let the agent call these routes for them.
   (`pending`, `building`, `awaiting-approval`, `done`), `approved`, `approval`, the
   `gates` state of `red`, `tests`, `visual` and `review`, the `evidence` behind
   each gate (including every reviewer round's findings), and `screenshots`.
+- `coverage`: the review of the planned checkpoints against the plan. `state` is
+  `none`, `findings`, `stale`, `pass`, or `off` once they are approved (or when the
+  run has no plan); `evidence` holds every round, shaped like a gate's (`reviewers`,
+  `history` with each round's findings); `fp` is the hash of the current list.
 - `next`: one line saying what happens next and who acts.
 - `learnings`, `feedback`, `log` (recent events), `runs`, `summary` (once
-  closed) and `warnings`.
+  closed) and `warnings` (`coverageIsolationNone` is true when the coverage review
+  was recorded without isolation).
 
 New fields may appear in the same `api` version. A route or field is removed or
 changes meaning only together with a bump of `api`.

@@ -115,6 +115,19 @@ The script assigns the ids (`CP1`, `CP2`, …). Write titles and `done` in plain
 language: the human approves this list by reading it in the viewer, and if they can't
 follow it, they can't catch what it's missing.
 
+## Revising after a coverage review
+
+Before the human sees the list, a reviewer checks it against the plan. When it finds
+gaps, a fresh planner is given the plan, the reference, the current list and the
+findings. Fix every finding:
+
+- **Missing:** add a checkpoint, or widen an existing one's `done` and tests.
+- **Scope creep:** remove it, or cut it back to what the plan asks for.
+- **Contradiction:** bring it in line with the plan.
+
+Return the whole revised list, not only the changes. If you think a finding is wrong,
+say so to the orchestrator; it goes to the human, who decides.
+
 ## Questions
 
 When the reference is ambiguous (two plausible behaviours, or old behaviour that looks

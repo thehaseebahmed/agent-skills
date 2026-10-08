@@ -56,8 +56,8 @@ function git(dir, ...args) {
   assert.strictEqual(r.status, 0, r.stderr);
 }
 
-/** A repo with a planned (unapproved) run in viewer-approval mode. */
-function planned() {
+/** A repo with a planned (unapproved) run in viewer-approval mode; the coverage review has passed unless told otherwise. */
+function planned({ coverage = true } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'theseus-srv-'));
   git(dir, 'init', '-q');
   fs.writeFileSync(path.join(dir, 'check.js'), "process.exit(require('fs').existsSync('impl.txt') ? 0 : 1);\n");
@@ -68,6 +68,7 @@ function planned() {
   fs.writeFileSync(file, JSON.stringify(CHECKPOINTS));
   confirmBrief(dir);
   ok(dir, 'checkpoints', '--file', file);
+  if (coverage) ok(dir, 'coverage', '--findings', '0');
   return dir;
 }
 

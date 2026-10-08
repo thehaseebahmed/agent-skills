@@ -68,6 +68,7 @@ function startRun(dir, key, extra = []) {
   const plan = path.join(path.dirname(dir), `plan-${key}-${path.basename(dir)}.json`);
   fs.writeFileSync(plan, JSON.stringify([{ title: `${key} one`, done: 'd', ui: false, tests: ['t'] }]));
   ok(dir, 'checkpoints', '--file', plan);
+  ok(dir, 'coverage', '--findings', '0');
   core.approvePlan(viewer(dir), { by: 'human (viewer)', source: 'viewer' });
 }
 
