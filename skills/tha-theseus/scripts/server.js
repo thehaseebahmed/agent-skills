@@ -100,7 +100,7 @@ const DEFAULT_HOST = '127.0.0.1';
 /** Check a bind address: an IP literal only, so no name lookup decides what is exposed. */
 function parseHost(value) {
   const host = String(value ?? '').trim().replace(/^\[(.*)\]$/, '$1');
-  if (!net.isIP(host)) throw new GateError(`host '${value}' is not an IP address — give one like 127.0.0.1, or 0.0.0.0 for every interface`);
+  if (!net.isIP(host)) throw new GateError(`bind address '${value}' is not an IP address — give one like 127.0.0.1, or 0.0.0.0 for every interface`);
   return host;
 }
 

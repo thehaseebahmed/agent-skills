@@ -5,7 +5,7 @@
  *
  * The viewer is a single static page. It holds no run state and reads nothing
  * from disk but itself: everything it shows comes from the API, over the same
- * routes any other UI would use (../../api.md). Mounted on the API server with
+ * routes any other UI would use (api.md at the skill root). Mounted on the API server with
  * `startServer(p, { ui: viewer() })`, it is served at `/` and talks to its own
  * origin. Opened from anywhere else, `?api=http://127.0.0.1:PORT` points it at
  * a server started with `--allow-origin` for wherever the page is hosted.

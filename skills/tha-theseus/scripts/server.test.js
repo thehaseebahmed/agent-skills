@@ -312,7 +312,7 @@ test('the server binds 127.0.0.1 unless given another IP address', async () => {
   assert.strictEqual(parseHost('[::]'), '::');
   assert.deepStrictEqual(['127.0.0.1', '127.0.0.2', '::1', '0.0.0.0', '::', '172.17.0.2'].map(isExposed), [false, false, false, true, true, true]);
   const p = core.resolvePaths(planned());
-  await assert.rejects(startServer(p, { port: 0, host: 'localhost' }), /host 'localhost' is not an IP address/);
+  await assert.rejects(startServer(p, { port: 0, host: 'localhost' }), /bind address 'localhost' is not an IP address/);
 });
 
 test('serve --host 0.0.0.0, or THESEUS_HOST, listens on every interface and warns that it does', async () => {
@@ -339,7 +339,7 @@ test('serve --host 0.0.0.0, or THESEUS_HOST, listens on every interface and warn
   }
   const bad = cli(dir, 'serve', '--port', '0', '--host', 'everywhere');
   assert.strictEqual(bad.code, 1);
-  assert.match(bad.err, /host 'everywhere' is not an IP address/);
+  assert.match(bad.err, /bind address 'everywhere' is not an IP address/);
   assert.match(cli(dir, 'serve', '--host').err, /--host needs a value/);
   assert.doesNotMatch(ok(dir, 'serve', '--port', '0').out, /listening on/, 'the default bind says nothing about exposure');
   ok(dir, 'stop');
