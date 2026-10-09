@@ -14,6 +14,7 @@ skills/
 | Skill | What it does |
 |---|---|
 | [`tha-theseus`](tha-theseus/SKILL.md) | Builds or migrates work one small checkpoint at a time behind four enforced gates — red-then-green tests, visual parity, two isolated adversarial reviewers, human approval — with a learnings file that later checkpoints read, and a live local viewer where the human approves |
+| [`tha-readable-code`](tha-readable-code/SKILL.md) | Keeps a change readable: small single-purpose functions, well-named functions instead of explanatory comments, reuse of existing helpers, and names that still fit after behaviour changes. Standalone, and the readability lens of the theseus code reviewers |
 
 To add one:
 

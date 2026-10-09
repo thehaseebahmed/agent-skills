@@ -49,7 +49,8 @@ not findings.
 
 ### Code review (gate 3)
 
-**Inputs:** the diff, the architecture docs, the learnings file.
+**Inputs:** the diff, the architecture docs, the learnings file. The readability
+rules below are part of your standards too.
 
 Look for, in this order:
 1. **Correctness:** behaviour the diff gets wrong, unhandled error paths, edge cases
@@ -59,7 +60,20 @@ Look for, in this order:
    require, and duplication of something that already exists.
 4. **Tests:** do they assert observable behaviour, and would they fail if the code
    were wrong?
-5. **Maintainability:** what the next person to touch this will trip on.
+5. **Readability:** apply the reviewer steps of
+   [tha-readable-code](../tha-readable-code/SKILL.md), which hold the thresholds and
+   the exceptions, to the code the diff adds or changes. If you cannot open it, use
+   these four rules; the architecture docs override their limits:
+   - **Small functions:** none the diff adds or grows runs past about 30 lines,
+     nests more than three levels, or does more than one job.
+   - **Names over comments:** a comment saying *what* code does is a finding;
+     extract a well-named function instead. A comment carrying *why* stays.
+   - **Reuse first:** new code that redoes an existing function is a finding only
+     when you cite that function by `file:line`.
+   - **Names track behaviour:** a function whose behaviour the diff changed is
+     named for all it now does (`applyRewrites` that now also deletes is
+     `applyChanges`); give the new name.
+6. **Maintainability:** what else the next person to touch this will trip on.
 
 ### Visual review (gate 2)
 
