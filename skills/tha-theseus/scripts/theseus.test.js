@@ -476,6 +476,8 @@ test('agents writes Claude and Copilot files with a single-string model and the 
   const reviewer = fs.readFileSync(path.join(dir, '.claude', 'agents', 'theseus-reviewer.md'), 'utf8');
   assert.match(reviewer, /## You are an adversarial reviewer/);
   assert.doesNotMatch(reviewer, /Hand this file \*\*verbatim\*\*/);
+  const readable = path.resolve(__dirname, '..', '..', 'tha-readable-code', 'SKILL.md');
+  assert.ok(reviewer.includes(`[tha-readable-code](${readable})`), 'the code reviewer is pointed at the readability skill by its real path');
 });
 
 test('agents omits model when none is given, so the agent inherits the session model', () => {
